@@ -2360,6 +2360,33 @@ ifeq ($(HAVE_NETWORKING), 1)
 	  network/netplay/netplay_frontend.o \
 	  network/netplay/netplay_room_parse.o
 
+   # GGPO netplay backend
+   DEFINES += -DHAVE_GGPO
+   INCLUDE_DIRS += -Ideps/ggpo/src/include -Ideps/ggpo/src/lib/ggpo -Ideps/ggpo/src/lib/lz4
+   OBJ += \
+      deps/ggpo/src/lib/ggpo/bitvector.o \
+      deps/ggpo/src/lib/ggpo/game_input.o \
+      deps/ggpo/src/lib/ggpo/input_queue.o \
+      deps/ggpo/src/lib/ggpo/log.o \
+      deps/ggpo/src/lib/ggpo/main.o \
+      deps/ggpo/src/lib/ggpo/poll.o \
+      deps/ggpo/src/lib/ggpo/sync.o \
+      deps/ggpo/src/lib/ggpo/timesync.o \
+      deps/ggpo/src/lib/ggpo/network/udp.o \
+      deps/ggpo/src/lib/ggpo/network/udp_proto.o \
+      deps/ggpo/src/lib/ggpo/backends/p2p.o \
+      deps/ggpo/src/lib/ggpo/backends/spectator.o \
+      deps/ggpo/src/lib/ggpo/backends/synctest.o \
+      deps/ggpo/src/lib/lz4/lz4.o
+
+   ifneq ($(findstring Win,$(OS)),)
+      OBJ += deps/ggpo/src/lib/ggpo/platform_windows.o
+   else ifeq ($(OSX), 1)
+      OBJ += deps/ggpo/src/lib/ggpo/platform_mac.o
+   else
+      OBJ += deps/ggpo/src/lib/ggpo/platform_linux.o
+   endif
+
    # RetroAchievements
    ifeq ($(HAVE_CHEEVOS), 1)
       DEFINES += -DHAVE_CHEEVOS -DRC_CLIENT_SUPPORTS_HASH

@@ -25,4 +25,58 @@
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
+  <ItemGroup>
+    <Filter Include="ggpo">
+      <UniqueIdentifier>{0bb9f615-3f7e-4185-8091-e70a30e8ff3f}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\bitvector.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\game_input.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\input_queue.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\log.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\main.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\poll.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\sync.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\timesync.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\network\udp.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\network\udp_proto.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\backends\p2p.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\backends\spectator.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\backends\synctest.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\platform_windows.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\lz4\lz4.c">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+  </ItemGroup>
 </Project>

@@ -33,4 +33,58 @@
     <CustomBuild Include="..\..\..\ui\drivers\qt\settingswidgets.h" />
     <CustomBuild Include="..\..\..\ui\drivers\qt\qt_options.h" />
   </ItemGroup>
+  <ItemGroup>
+    <Filter Include="ggpo">
+      <UniqueIdentifier>{387bbdae-cf21-4a05-98ee-06a83f390615}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\bitvector.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\game_input.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\input_queue.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\log.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\main.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\poll.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\sync.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\timesync.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\network\udp.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\network\udp_proto.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\backends\p2p.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\backends\spectator.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\backends\synctest.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\ggpo\platform_windows.cpp">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\..\deps\ggpo\src\lib\lz4\lz4.c">
+      <Filter>ggpo</Filter>
+    </ClCompile>
+  </ItemGroup>
 </Project>

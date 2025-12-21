@@ -27,6 +27,11 @@
 
 #include "../../retroarch_types.h"
 
+#ifdef HAVE_GGPO
+typedef struct GGPOSession GGPOSession;
+typedef int GGPOPlayerHandle;
+#endif
+
 #ifndef VITA
 #define RARCH_DEFAULT_PORT   55435
 #else
@@ -278,7 +283,10 @@ enum netplay_modus
    /* Netplay operates by having the active core send and receive custom
       packets once connection setup and handshake has been completed.
       Time skips (pausing, fast forward, save state loading) are refused. */
-   NETPLAY_MODUS_CORE_PACKET_INTERFACE = 1
+   NETPLAY_MODUS_CORE_PACKET_INTERFACE = 1,
+
+   /* Netplay operates using the GGPO rollback networking library. */
+   NETPLAY_MODUS_GGPO = 2
 };
 
 /* Input state for a particular client-device pair */
@@ -686,6 +694,27 @@ struct netplay
 
    /* Host settings */
    bool allow_pausing;
+
+#ifdef HAVE_GGPO
+   GGPOSession *ggpo;
+   GGPOPlayerHandle ggpo_local_handle;
+   GGPOPlayerHandle ggpo_remote_handle;
+   uint32_t ggpo_device_words[MAX_INPUT_DEVICES];
+   uint32_t ggpo_device_offsets[MAX_INPUT_DEVICES];
+   uint32_t ggpo_input_words;
+   uint32_t ggpo_input_size;
+   uint32_t ggpo_player_count;
+   uint32_t ggpo_disconnect_flags;
+   uint32_t ggpo_stall_frames;
+   uint32_t ggpo_local_player_index;
+   uint32_t ggpo_remote_player_index;
+   uint32_t ggpo_local_devices;
+   uint32_t ggpo_remote_devices;
+   uint32_t *ggpo_sync_inputs;
+   uint32_t *ggpo_local_input;
+   bool ggpo_running;
+   bool ggpo_in_rollback;
+#endif
 };
 
 void video_frame_net(const void *data,

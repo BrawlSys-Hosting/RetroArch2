@@ -82,6 +82,11 @@
 
 #include "netplay_private.h"
 
+#ifdef HAVE_GGPO
+#include <ggponet.h>
+#define GGPO_INPUT_MAX_BYTES 15
+#endif
+
 #ifdef TCP_NODELAY
 #define SET_TCP_NODELAY(fd) \
    { \
@@ -218,6 +223,16 @@ net_driver_state_t *networking_state_get_ptr(void)
 
 static bool netplay_build_savestate(netplay_t* netplay, retro_ctx_serialize_info_t* serial_info, bool force_capture_achievements);
 static bool netplay_process_savestate(netplay_t* netplay, retro_ctx_serialize_info_t* serial_info);
+static void netplay_disconnect(netplay_t *netplay);
+
+#ifdef HAVE_GGPO
+static bool netplay_ggpo_init_session(netplay_t *netplay,
+      const char *peer_address, uint16_t port);
+static bool netplay_ggpo_pre_frame(netplay_t *netplay);
+static void netplay_ggpo_post_frame(netplay_t *netplay);
+static int16_t netplay_input_state_ggpo(netplay_t *netplay,
+      unsigned port, unsigned device, unsigned idx, unsigned id);
+#endif
 
 /* Align to 8-byte boundary */
 #define CONTENT_ALIGN_SIZE(size) ((((size) + 7) & ~7))
@@ -2283,6 +2298,232 @@ static uint32_t netplay_expected_input_size(netplay_t *netplay,
 
    return ret;
 }
+
+#ifdef HAVE_GGPO
+static bool netplay_ggpo_init_input_layout(netplay_t *netplay,
+      unsigned local_device_port, unsigned remote_device_port)
+{
+   uint32_t size_local  = 0;
+   uint32_t size_remote = 0;
+   uint32_t max_words   = 0;
+
+   if (!netplay)
+      return false;
+
+   memset(netplay->ggpo_device_offsets, 0, sizeof(netplay->ggpo_device_offsets));
+   memset(netplay->ggpo_device_words, 0, sizeof(netplay->ggpo_device_words));
+
+   if (local_device_port >= MAX_INPUT_DEVICES ||
+       remote_device_port >= MAX_INPUT_DEVICES)
+      return false;
+
+   size_local  = netplay_expected_input_size(netplay, 1 << local_device_port);
+   size_remote = netplay_expected_input_size(netplay, 1 << remote_device_port);
+
+   if (!size_local || !size_remote)
+   {
+      RARCH_ERR("[Netplay] GGPO input layout is empty or unsupported.\n");
+      return false;
+   }
+
+   max_words = (size_local > size_remote) ? size_local : size_remote;
+
+   netplay->ggpo_device_offsets[local_device_port]  = 0;
+   netplay->ggpo_device_offsets[remote_device_port] = 0;
+   netplay->ggpo_device_words[local_device_port]    = size_local;
+   netplay->ggpo_device_words[remote_device_port]   = size_remote;
+
+   netplay->ggpo_input_words = max_words;
+   netplay->ggpo_input_size  = max_words * sizeof(uint32_t);
+
+   if (!netplay->ggpo_input_size)
+      return false;
+
+   if (netplay->ggpo_input_size > GGPO_INPUT_MAX_BYTES)
+   {
+      RARCH_ERR("[Netplay] GGPO input size %u exceeds limit %u.\n",
+            (unsigned)netplay->ggpo_input_size,
+            (unsigned)GGPO_INPUT_MAX_BYTES);
+      return false;
+   }
+
+   return true;
+}
+
+static void netplay_ggpo_collect_local_input(netplay_t *netplay, uint32_t *input)
+{
+   unsigned port;
+   retro_input_state_t cb = netplay->cbs.state_cb;
+
+   memset(input, 0, netplay->ggpo_input_size);
+
+   for (port = 0; port < MAX_INPUT_DEVICES; port++)
+   {
+      unsigned dtype;
+      uint32_t *state;
+      unsigned i;
+
+      if (!(netplay->ggpo_local_devices & (1U << port)))
+         continue;
+
+      if (!netplay->ggpo_device_words[port])
+         continue;
+
+      dtype = netplay->config_devices[port] & RETRO_DEVICE_MASK;
+      state = input + netplay->ggpo_device_offsets[port];
+
+      switch (dtype)
+      {
+         case RETRO_DEVICE_ANALOG:
+            for (i = 0; i < 2; i++)
+            {
+               int16_t tmp_x = cb(port, RETRO_DEVICE_ANALOG, (unsigned)i, 0);
+               int16_t tmp_y = cb(port, RETRO_DEVICE_ANALOG, (unsigned)i, 1);
+               state[1 + i] = (uint16_t)tmp_x | (((uint16_t)tmp_y) << 16);
+            }
+            /* fall through */
+         case RETRO_DEVICE_JOYPAD:
+            for (i = 0; i <= RETRO_DEVICE_ID_JOYPAD_R3; i++)
+            {
+               int16_t tmp = cb(port, RETRO_DEVICE_JOYPAD, 0, (unsigned)i);
+               state[0] |= tmp ? (1U << i) : 0;
+            }
+            break;
+
+         case RETRO_DEVICE_MOUSE:
+         case RETRO_DEVICE_LIGHTGUN:
+            {
+               int16_t tmp_x = cb(port, dtype, 0, 0);
+               int16_t tmp_y = cb(port, dtype, 0, 1);
+               state[1]      = (uint16_t)tmp_x | (((uint16_t)tmp_y) << 16);
+               for (i = 2;
+                     i <= (unsigned)((dtype == RETRO_DEVICE_MOUSE) ?
+                           RETRO_DEVICE_ID_MOUSE_HORIZ_WHEELDOWN :
+                           RETRO_DEVICE_ID_LIGHTGUN_START);
+                     i++)
+               {
+                  int16_t tmp = cb(port, dtype, 0, (unsigned)i);
+                  state[0] |= tmp ? (1U << i) : 0;
+               }
+            }
+            break;
+
+         case RETRO_DEVICE_KEYBOARD:
+            {
+               unsigned key;
+               unsigned word = 0;
+               unsigned bit  = 1;
+               for (key = 1; key < NETPLAY_KEY_LAST; key++)
+               {
+                  state[word] |=
+                     cb(port, RETRO_DEVICE_KEYBOARD, 0,
+                        netplay_key_ntoh(netplay, key)) ?
+                           (UINT32_C(1) << bit) : 0;
+                  bit++;
+                  if (bit >= 32)
+                  {
+                     bit = 0;
+                     word++;
+                     if (word >= netplay->ggpo_device_words[port])
+                        break;
+                  }
+               }
+            }
+            break;
+
+         default:
+            break;
+      }
+   }
+}
+
+static int16_t netplay_input_state_ggpo(netplay_t *netplay,
+      unsigned port, unsigned device,
+      unsigned idx, unsigned id)
+{
+   const uint32_t *curr_input_state = NULL;
+   uint32_t *player_inputs          = NULL;
+   uint32_t player_index            = 0;
+   uint32_t words                   = 0;
+
+   if (!netplay || !netplay->ggpo_sync_inputs)
+      return 0;
+
+   if (port >= MAX_INPUT_DEVICES)
+      return 0;
+
+   if (device != RETRO_DEVICE_JOYPAD &&
+       (netplay->config_devices[port] & RETRO_DEVICE_MASK) != device)
+   {
+      for (port = 0; port < MAX_INPUT_DEVICES; port++)
+      {
+         if ((netplay->config_devices[port] & RETRO_DEVICE_MASK) == device)
+            break;
+      }
+      if (port == MAX_INPUT_DEVICES)
+         return 0;
+   }
+
+   words = netplay->ggpo_device_words[port];
+   if (!words)
+      return 0;
+
+   if (netplay->ggpo_local_devices & (1U << port))
+      player_index = netplay->ggpo_local_player_index;
+   else if (netplay->ggpo_remote_devices & (1U << port))
+      player_index = netplay->ggpo_remote_player_index;
+   else
+      return 0;
+
+   player_inputs = netplay->ggpo_sync_inputs +
+      (player_index * netplay->ggpo_input_words);
+   curr_input_state = player_inputs + netplay->ggpo_device_offsets[port];
+
+   switch (device)
+   {
+      case RETRO_DEVICE_JOYPAD:
+         if (id == RETRO_DEVICE_ID_JOYPAD_MASK)
+            return curr_input_state[0];
+         return ((1U << id) & curr_input_state[0]) ? 1 : 0;
+
+      case RETRO_DEVICE_ANALOG:
+         if (words == 3)
+         {
+            uint32_t state = curr_input_state[1 + idx];
+            return (int16_t)(uint16_t)(state >> (id * 16));
+         }
+         break;
+
+      case RETRO_DEVICE_MOUSE:
+      case RETRO_DEVICE_LIGHTGUN:
+         if (words == 2)
+         {
+            if (id <= RETRO_DEVICE_ID_MOUSE_Y)
+               return (int16_t)(uint16_t)(curr_input_state[1] >> (id * 16));
+            return ((1U << id) & curr_input_state[0]) ? 1 : 0;
+         }
+         break;
+
+      case RETRO_DEVICE_KEYBOARD:
+         {
+            unsigned key = netplay_key_hton(netplay, id);
+            if (key != NETPLAY_KEY_UNKNOWN)
+            {
+               unsigned word = key / 32;
+               unsigned bit  = key % 32;
+               if (word < words)
+                  return ((UINT32_C(1) << bit) & curr_input_state[word]) ? 1 : 0;
+            }
+         }
+         break;
+
+      default:
+         break;
+   }
+
+   return 0;
+}
+#endif
 
 static size_t buf_used(struct socket_buffer *sbuf)
 {
@@ -7229,6 +7470,310 @@ static bool netplay_init_buffers(netplay_t *netplay)
    return netplay_init_socket_buffers(netplay);
 }
 
+#ifdef HAVE_GGPO
+static bool __cdecl netplay_ggpo_begin_game(const char *game)
+{
+   (void)game;
+   return true;
+}
+
+static bool __cdecl netplay_ggpo_save_game_state(
+      unsigned char **buffer, int *len, int *checksum, int frame)
+{
+   netplay_t *netplay = networking_driver_st.data;
+   retro_ctx_serialize_info_t serial_info = {0};
+   unsigned char *data = NULL;
+
+   (void)frame;
+
+   if (!netplay || !len || !buffer)
+      return false;
+
+   data = (unsigned char*)malloc(netplay->state_size);
+   if (!data)
+      return false;
+
+   serial_info.data = data;
+   serial_info.size = netplay->state_size;
+
+   if (!netplay_build_savestate(netplay, &serial_info, true))
+   {
+      free(data);
+      return false;
+   }
+
+   *buffer = data;
+   *len = (int)serial_info.size;
+   if (checksum)
+      *checksum = (int)encoding_crc32(0, data, serial_info.size);
+
+   return true;
+}
+
+static bool __cdecl netplay_ggpo_load_game_state(unsigned char *buffer, int len)
+{
+   netplay_t *netplay = networking_driver_st.data;
+   retro_ctx_serialize_info_t serial_info = {0};
+
+   if (!netplay || !buffer || len <= 0)
+      return false;
+
+   serial_info.data_const = buffer;
+   serial_info.size = (size_t)len;
+
+   return netplay_process_savestate(netplay, &serial_info);
+}
+
+static bool __cdecl netplay_ggpo_log_game_state(
+      char *filename, unsigned char *buffer, int len)
+{
+   (void)filename;
+   (void)buffer;
+   (void)len;
+   return true;
+}
+
+static void __cdecl netplay_ggpo_free_buffer(void *buffer)
+{
+   free(buffer);
+}
+
+static bool __cdecl netplay_ggpo_advance_frame(int flags)
+{
+   netplay_t *netplay = networking_driver_st.data;
+   GGPOErrorCode result;
+   int disconnect_flags = 0;
+
+   (void)flags;
+
+   if (!netplay || !netplay->ggpo)
+      return false;
+
+   result = ggpo_synchronize_input(
+         netplay->ggpo,
+         netplay->ggpo_sync_inputs,
+         (int)(netplay->ggpo_input_size * netplay->ggpo_player_count),
+         &disconnect_flags);
+   if (!GGPO_SUCCEEDED(result))
+      return false;
+
+   netplay->ggpo_disconnect_flags = (uint32_t)disconnect_flags;
+
+   netplay->ggpo_in_rollback = true;
+   netplay->is_replay = true;
+
+#ifdef HAVE_THREADS
+   autosave_lock();
+#endif
+   core_run();
+#ifdef HAVE_THREADS
+   autosave_unlock();
+#endif
+
+   netplay->is_replay = false;
+   netplay->ggpo_in_rollback = false;
+
+   ggpo_advance_frame(netplay->ggpo);
+
+   return true;
+}
+
+static bool __cdecl netplay_ggpo_on_event(GGPOEvent *info)
+{
+   netplay_t *netplay = networking_driver_st.data;
+
+   if (!netplay || !info)
+      return true;
+
+   switch (info->code)
+   {
+      case GGPO_EVENTCODE_CONNECTED_TO_PEER:
+      case GGPO_EVENTCODE_SYNCHRONIZING_WITH_PEER:
+      case GGPO_EVENTCODE_SYNCHRONIZED_WITH_PEER:
+         break;
+
+      case GGPO_EVENTCODE_RUNNING:
+         netplay->ggpo_running = true;
+         netplay->stall = NETPLAY_STALL_NONE;
+         netplay->self_mode = NETPLAY_CONNECTION_PLAYING;
+         break;
+
+      case GGPO_EVENTCODE_TIMESYNC:
+         netplay->ggpo_stall_frames = (uint32_t)info->u.timesync.frames_ahead;
+         netplay->stall = NETPLAY_STALL_RUNNING_FAST;
+         break;
+
+      case GGPO_EVENTCODE_CONNECTION_INTERRUPTED:
+         netplay->stall = NETPLAY_STALL_RUNNING_FAST;
+         break;
+
+      case GGPO_EVENTCODE_CONNECTION_RESUMED:
+         netplay->stall = NETPLAY_STALL_NONE;
+         break;
+
+      case GGPO_EVENTCODE_DISCONNECTED_FROM_PEER:
+         netplay->ggpo_running = false;
+         netplay->self_mode = NETPLAY_CONNECTION_NONE;
+         netplay->stall = NETPLAY_STALL_NONE;
+         break;
+   }
+
+   return true;
+}
+
+static bool netplay_ggpo_init_session(netplay_t *netplay,
+      const char *peer_address, uint16_t port)
+{
+   GGPOErrorCode result;
+   GGPOSessionCallbacks cb = {0};
+   GGPOPlayer player = {0};
+   settings_t *settings = config_get_ptr();
+   const char *game_name = NULL;
+   const char *peer_ip = NULL;
+   struct addrinfo *addr = NULL;
+   struct addrinfo hints = {0};
+   char resolved_ip[64];
+   char port_buf[6];
+   uint16_t local_port = port;
+   uint16_t remote_port = port;
+   unsigned local_device_port = netplay->is_server ? 0 : 1;
+   unsigned remote_device_port = netplay->is_server ? 1 : 0;
+
+   if (string_is_empty(peer_address))
+      peer_address = settings->paths.netplay_server;
+
+   if (string_is_empty(peer_address))
+   {
+      RARCH_ERR("[Netplay] GGPO requires a peer address.\n");
+      return false;
+   }
+
+   if (port == UINT16_MAX)
+   {
+      RARCH_ERR("[Netplay] GGPO port must be below 65535.\n");
+      return false;
+   }
+
+   if (netplay->is_server)
+   {
+      local_port = port;
+      remote_port = (uint16_t)(port + 1);
+   }
+   else
+   {
+      local_port = (uint16_t)(port + 1);
+      remote_port = port;
+   }
+
+   if (!network_init())
+   {
+      RARCH_ERR("[Netplay] GGPO failed to initialize networking.\n");
+      return false;
+   }
+
+   snprintf(port_buf, sizeof(port_buf), "%hu", (unsigned short)port);
+   hints.ai_family = AF_INET;
+   hints.ai_socktype = SOCK_DGRAM;
+   hints.ai_flags |= AI_NUMERICSERV;
+
+   if (getaddrinfo_retro(peer_address, port_buf, &hints, &addr) || !addr)
+   {
+      RARCH_ERR("[Netplay] GGPO failed to resolve host: %s\n", peer_address);
+      return false;
+   }
+
+   if (!getnameinfo_retro(addr->ai_addr, addr->ai_addrlen,
+         resolved_ip, sizeof(resolved_ip), NULL, 0, NI_NUMERICHOST))
+      peer_ip = resolved_ip;
+   else
+      peer_ip = peer_address;
+
+   freeaddrinfo_retro(addr);
+   addr = NULL;
+
+   if (!netplay->state_size)
+   {
+      if (!netplay_wait_and_init_serialization(netplay))
+         return false;
+   }
+
+   netplay->ggpo_local_devices  = 1U << local_device_port;
+   netplay->ggpo_remote_devices = 1U << remote_device_port;
+   netplay->self_devices        = netplay->ggpo_local_devices;
+
+   if (!netplay_ggpo_init_input_layout(
+         netplay, local_device_port, remote_device_port))
+   {
+      RARCH_ERR("[Netplay] GGPO input layout is invalid.\n");
+      return false;
+   }
+
+   netplay->ggpo_player_count = 2;
+   netplay->ggpo_local_player_index = netplay->is_server ? 0 : 1;
+   netplay->ggpo_remote_player_index = netplay->is_server ? 1 : 0;
+   netplay->ggpo_local_devices = 1U << local_device_port;
+   netplay->ggpo_remote_devices = 1U << remote_device_port;
+   netplay->self_devices = netplay->ggpo_local_devices;
+
+   netplay->ggpo_local_input = (uint32_t*)calloc(1, netplay->ggpo_input_size);
+   netplay->ggpo_sync_inputs = (uint32_t*)calloc(
+         netplay->ggpo_player_count, netplay->ggpo_input_size);
+   if (!netplay->ggpo_local_input || !netplay->ggpo_sync_inputs)
+      return false;
+
+   cb.begin_game = netplay_ggpo_begin_game;
+   cb.save_game_state = netplay_ggpo_save_game_state;
+   cb.load_game_state = netplay_ggpo_load_game_state;
+   cb.log_game_state = netplay_ggpo_log_game_state;
+   cb.free_buffer = netplay_ggpo_free_buffer;
+   cb.advance_frame = netplay_ggpo_advance_frame;
+   cb.on_event = netplay_ggpo_on_event;
+
+   game_name = runloop_state_get_ptr()->system.info.library_name;
+   if (string_is_empty(game_name))
+      game_name = "retroarch";
+
+   result = ggpo_start_session(&netplay->ggpo, &cb, game_name,
+         (int)netplay->ggpo_player_count,
+         (int)netplay->ggpo_input_size, local_port);
+   if (!GGPO_SUCCEEDED(result))
+      return false;
+
+   ggpo_set_disconnect_timeout(netplay->ggpo, 3000);
+   ggpo_set_disconnect_notify_start(netplay->ggpo, 1000);
+
+   player.size = sizeof(player);
+   player.type = GGPO_PLAYERTYPE_LOCAL;
+   player.player_num = (int)netplay->ggpo_local_player_index + 1;
+   result = ggpo_add_player(netplay->ggpo, &player,
+         &netplay->ggpo_local_handle);
+   if (!GGPO_SUCCEEDED(result))
+      return false;
+
+   if (settings->uints.netplay_input_latency_frames_min > 0)
+      ggpo_set_frame_delay(netplay->ggpo, netplay->ggpo_local_handle,
+            (int)settings->uints.netplay_input_latency_frames_min);
+
+   memset(&player, 0, sizeof(player));
+   player.size = sizeof(player);
+   player.type = GGPO_PLAYERTYPE_REMOTE;
+   player.player_num = (int)netplay->ggpo_remote_player_index + 1;
+   strlcpy(player.u.remote.ip_address, peer_ip,
+         sizeof(player.u.remote.ip_address));
+   player.u.remote.port = remote_port;
+
+   result = ggpo_add_player(netplay->ggpo, &player,
+         &netplay->ggpo_remote_handle);
+   if (!GGPO_SUCCEEDED(result))
+      return false;
+
+   netplay->ggpo_running = false;
+   netplay->self_mode = NETPLAY_CONNECTION_CONNECTED;
+
+   return true;
+}
+#endif
+
 /**
  * netplay_free
  * @netplay              : pointer to netplay object
@@ -7238,6 +7783,20 @@ static bool netplay_init_buffers(netplay_t *netplay)
 static void netplay_free(netplay_t *netplay)
 {
    size_t i;
+
+#ifdef HAVE_GGPO
+   if (netplay->ggpo)
+   {
+      ggpo_close_session(netplay->ggpo);
+      netplay->ggpo = NULL;
+   }
+
+   free(netplay->ggpo_local_input);
+   netplay->ggpo_local_input = NULL;
+
+   free(netplay->ggpo_sync_inputs);
+   netplay->ggpo_sync_inputs = NULL;
+#endif
 
    if (netplay->listen_fd >= 0)
       socket_close(netplay->listen_fd);
@@ -7419,6 +7978,41 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
       netplay->allow_pausing = true;
 
       /* Clients get device info from the server. */
+      if (netplay->modus == NETPLAY_MODUS_GGPO)
+      {
+         unsigned i;
+         for (i = 0; i < MAX_INPUT_DEVICES; i++)
+         {
+            uint32_t device = input_config_get_device(i);
+
+            netplay->config_devices[i] = device;
+
+            switch (device & RETRO_DEVICE_MASK)
+            {
+               case RETRO_DEVICE_KEYBOARD:
+                  netplay->have_updown_device = true;
+               case RETRO_DEVICE_JOYPAD:
+               case RETRO_DEVICE_MOUSE:
+               case RETRO_DEVICE_LIGHTGUN:
+               case RETRO_DEVICE_ANALOG:
+               case RETRO_DEVICE_NONE:
+                  break;
+               default:
+                  RARCH_WARN("[Netplay] Netplay does not support input device %u.\n",
+                     i + 1);
+                  break;
+            }
+         }
+      }
+   }
+
+   if (netplay->modus == NETPLAY_MODUS_GGPO)
+   {
+      if (!netplay_init_buffers(netplay))
+         goto failure;
+      if (!netplay_ggpo_init_session(netplay, server, port))
+         goto failure;
+      return netplay;
    }
 
    if (     !init_tcp_socket(netplay, server, mitm, port)
@@ -8377,6 +8971,11 @@ catastrophe:
  **/
 static bool netplay_is_alive(netplay_t *netplay)
 {
+#ifdef HAVE_GGPO
+   if (netplay->modus == NETPLAY_MODUS_GGPO)
+      return netplay->ggpo_running;
+#endif
+
    return netplay->is_server ||
       netplay->self_mode >= NETPLAY_CONNECTION_CONNECTED;
 }
@@ -8876,6 +9475,14 @@ int16_t input_state_net(unsigned port, unsigned device,
    netplay_t          *netplay = net_st->data;
    if (netplay)
    {
+#ifdef HAVE_GGPO
+      if (netplay->modus == NETPLAY_MODUS_GGPO)
+      {
+         if (netplay_is_alive(netplay))
+            return netplay_input_state_ggpo(netplay, port, device, idx, id);
+         return netplay->cbs.state_cb(port, device, idx, id);
+      }
+#endif
       if (netplay_is_alive(netplay))
          return netplay_input_state(netplay, port, device, idx, id);
       return netplay->cbs.state_cb(port, device, idx, id);
@@ -8911,6 +9518,79 @@ static void netplay_disconnect(netplay_t *netplay)
 #endif
 }
 
+#ifdef HAVE_GGPO
+static bool netplay_ggpo_pre_frame(netplay_t *netplay)
+{
+   GGPOErrorCode result;
+   int disconnect_flags = 0;
+
+   if (!netplay || !netplay->ggpo)
+      return true;
+
+   if (netplay->ggpo_in_rollback)
+      return true;
+
+   if (netplay->local_paused)
+      netplay_frontend_paused(netplay, false);
+
+   if (netplay->self_mode == NETPLAY_CONNECTION_NONE)
+   {
+      netplay_disconnect(netplay);
+      return false;
+   }
+
+   if (netplay->ggpo_stall_frames)
+   {
+      netplay->ggpo_stall_frames--;
+      if (!netplay->ggpo_stall_frames)
+         netplay->stall = NETPLAY_STALL_NONE;
+      ggpo_idle(netplay->ggpo, 0);
+      return false;
+   }
+
+   if (!netplay->ggpo_running)
+   {
+      ggpo_idle(netplay->ggpo, 0);
+      return false;
+   }
+
+   netplay_ggpo_collect_local_input(netplay, netplay->ggpo_local_input);
+
+   result = ggpo_add_local_input(netplay->ggpo, netplay->ggpo_local_handle,
+         netplay->ggpo_local_input, (int)netplay->ggpo_input_size);
+   if (!GGPO_SUCCEEDED(result))
+   {
+      ggpo_idle(netplay->ggpo, 0);
+      return false;
+   }
+
+   result = ggpo_synchronize_input(netplay->ggpo,
+         netplay->ggpo_sync_inputs,
+         (int)(netplay->ggpo_input_size * netplay->ggpo_player_count),
+         &disconnect_flags);
+   if (!GGPO_SUCCEEDED(result))
+   {
+      ggpo_idle(netplay->ggpo, 0);
+      return false;
+   }
+
+   netplay->ggpo_disconnect_flags = (uint32_t)disconnect_flags;
+   return true;
+}
+
+static void netplay_ggpo_post_frame(netplay_t *netplay)
+{
+   if (!netplay || !netplay->ggpo)
+      return;
+
+   if (netplay->ggpo_in_rollback)
+      return;
+
+   ggpo_advance_frame(netplay->ggpo);
+   ggpo_idle(netplay->ggpo, 0);
+}
+#endif
+
 /**
  * netplay_pre_frame:
  * @netplay              : pointer to netplay object
@@ -8923,6 +9603,11 @@ static void netplay_disconnect(netplay_t *netplay)
  **/
 static bool netplay_pre_frame(netplay_t *netplay)
 {
+#ifdef HAVE_GGPO
+   if (netplay->modus == NETPLAY_MODUS_GGPO)
+      return netplay_ggpo_pre_frame(netplay);
+#endif
+
    /* FIXME: This is an ugly way to learn we're not paused anymore */
    if (netplay->local_paused)
       netplay_frontend_paused(netplay, false);
@@ -9006,6 +9691,14 @@ static bool netplay_pre_frame(netplay_t *netplay)
 static void netplay_post_frame(netplay_t *netplay)
 {
    size_t i;
+
+#ifdef HAVE_GGPO
+   if (netplay->modus == NETPLAY_MODUS_GGPO)
+   {
+      netplay_ggpo_post_frame(netplay);
+      return;
+   }
+#endif
 
    /* When a core uses the netpacket interface frames are not synced */
    if (netplay->modus == NETPLAY_MODUS_INPUT_FRAME_SYNC)
@@ -9093,6 +9786,10 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
 
    if (net_st->core_netpacket_interface)
       modus = NETPLAY_MODUS_CORE_PACKET_INTERFACE;
+#ifdef HAVE_GGPO
+   else if (settings->bools.netplay_use_ggpo)
+      modus = NETPLAY_MODUS_GGPO;
+#endif
 
    if ((!core_info_current_supports_netplay()
          || serialization_quirks & (RETRO_SERIALIZATION_QUIRK_INCOMPLETE
@@ -9125,7 +9822,8 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
 
       server = NULL;
 
-      if (settings->bools.netplay_use_mitm_server)
+      if (settings->bools.netplay_use_mitm_server &&
+            modus != NETPLAY_MODUS_GGPO)
       {
          const char *mitm_handle = settings->arrays.netplay_mitm_server;
 
@@ -9173,6 +9871,16 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
       goto failure;
 
    net_st->data = netplay;
+
+   if (netplay->modus == NETPLAY_MODUS_GGPO)
+   {
+      const char *_msg = netplay->is_server ?
+         msg_hash_to_str(MSG_WAITING_FOR_CLIENT) :
+         msg_hash_to_str(MSG_CONNECTING_TO_NETPLAY_HOST);
+      runloop_msg_queue_push(_msg, strlen(_msg), 0, 180, false, NULL,
+         MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+      return true;
+   }
 
    if (netplay->is_server)
    {
@@ -9384,7 +10092,13 @@ static bool kick_client_by_id_and_name(netplay_t *netplay,
 static bool netplay_have_any_active_connection(netplay_t *netplay)
 {
    size_t i;
-   if (!netplay || !netplay->is_server)
+   if (!netplay)
+      return false;
+#ifdef HAVE_GGPO
+   if (netplay->modus == NETPLAY_MODUS_GGPO)
+      return netplay->ggpo_running;
+#endif
+   if (!netplay->is_server)
       return (netplay && netplay->self_mode >= NETPLAY_CONNECTION_CONNECTED);
    for (i = 0; i < netplay->connections_size; i++)
       if (     (netplay->connections[i].flags & NETPLAY_CONN_FLAG_ACTIVE)
@@ -9581,9 +10295,18 @@ bool netplay_driver_ctl(enum rarch_netplay_ctl_state state, void *data)
          break;
 
       case RARCH_NETPLAY_CTL_IS_CONNECTED:
-         ret = (     netplay
-               && (!(netplay->is_server))
-               &&   (netplay->self_mode >= NETPLAY_CONNECTION_CONNECTED));
+         {
+            bool is_connected = false;
+#ifdef HAVE_GGPO
+            if (netplay && netplay->modus == NETPLAY_MODUS_GGPO)
+               is_connected = netplay->ggpo_running;
+            else
+#endif
+               is_connected = (     netplay
+                     && (!(netplay->is_server))
+                     &&   (netplay->self_mode >= NETPLAY_CONNECTION_CONNECTED));
+            ret = is_connected;
+         }
          break;
 
       case RARCH_NETPLAY_CTL_IS_SPECTATING:
@@ -9608,14 +10331,14 @@ bool netplay_driver_ctl(enum rarch_netplay_ctl_state state, void *data)
          break;
 
       case RARCH_NETPLAY_CTL_GAME_WATCH:
-         if (netplay && netplay->modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE)
+         if (netplay && netplay->modus == NETPLAY_MODUS_INPUT_FRAME_SYNC)
             netplay_toggle_play_spectate(netplay);
          else
             ret = false;
          break;
 
       case RARCH_NETPLAY_CTL_PLAYER_CHAT:
-         if (netplay)
+         if (netplay && netplay->modus == NETPLAY_MODUS_INPUT_FRAME_SYNC)
             netplay_input_chat(netplay);
          else
             ret = false;
@@ -9623,7 +10346,8 @@ bool netplay_driver_ctl(enum rarch_netplay_ctl_state state, void *data)
 
       case RARCH_NETPLAY_CTL_ALLOW_PAUSE:
          ret = (!netplay || (netplay->allow_pausing &&
-                  (netplay->modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE ||
+                  ((netplay->modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE &&
+                     netplay->modus != NETPLAY_MODUS_GGPO) ||
                      !netplay_have_any_active_connection(netplay))));
          break;
 
@@ -9647,13 +10371,13 @@ bool netplay_driver_ctl(enum rarch_netplay_ctl_state state, void *data)
          break;
 
       case RARCH_NETPLAY_CTL_LOAD_SAVESTATE:
-         if (netplay && netplay->modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE)
+         if (netplay && netplay->modus == NETPLAY_MODUS_INPUT_FRAME_SYNC)
             netplay_load_savestate(netplay,
                (retro_ctx_serialize_info_t*)data, true);
          break;
 
       case RARCH_NETPLAY_CTL_RESET:
-         if (netplay && netplay->modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE)
+         if (netplay && netplay->modus == NETPLAY_MODUS_INPUT_FRAME_SYNC)
             netplay_core_reset(netplay);
          break;
 
@@ -9672,7 +10396,7 @@ bool netplay_driver_ctl(enum rarch_netplay_ctl_state state, void *data)
       case RARCH_NETPLAY_CTL_DESYNC_PUSH:
          if (netplay)
          {
-            if (netplay->modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE)
+            if (netplay->modus == NETPLAY_MODUS_INPUT_FRAME_SYNC)
                netplay->desync++;
             else if (netplay_have_any_active_connection(netplay))
                ret = false;
@@ -9772,7 +10496,8 @@ bool netplay_driver_ctl(enum rarch_netplay_ctl_state state, void *data)
 
       case RARCH_NETPLAY_CTL_ALLOW_TIMESKIP:
          ret = (!netplay
-                  || netplay->modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE
+                  || (netplay->modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE
+                  &&  netplay->modus != NETPLAY_MODUS_GGPO)
                   || !netplay_have_any_active_connection(netplay));
          break;
 

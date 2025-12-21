@@ -432,3 +432,15 @@ ANALOG
        Right analog Y: int16
        Right analog X: int16
     }
+
+GGPO backend notes
+
+RetroArch can be built with an optional GGPO backend for netplay. This is a
+P2P-only mode intended for low-latency rollback and currently assumes a
+two-player session. The peer address must be provided via netplay_ip_address
+(even when hosting). GGPO uses netplay_port as a base: the host binds
+netplay_port, the client binds netplay_port + 1, and each side targets the
+opposite port. Inputs are mapped to port 1 on the host and port 2 on the
+client, with the opposite port treated as remote input; both peers must have
+the same input device setup on those ports. Spectator mode, chat relay, and
+MITM/lobby features are not available in GGPO mode.
