@@ -7549,6 +7549,8 @@ static bool __cdecl netplay_ggpo_advance_frame(int flags)
    if (!netplay || !netplay->ggpo)
       return false;
 
+   netplay->ggpo_rollback_frames++;
+
    result = ggpo_synchronize_input(
          netplay->ggpo,
          netplay->ggpo_sync_inputs,
@@ -10904,6 +10906,140 @@ static void gfx_widget_netplay_ping_frame(void *data, void *userdata)
    }
 }
 
+#ifdef HAVE_GGPO
+static void gfx_widget_netplay_ggpo_stats_iterate(void *user_data,
+      unsigned width, unsigned height, bool fullscreen,
+      const char *dir_assets, char *font_path, bool is_threaded)
+{
+   net_driver_state_t *net_st   = &networking_driver_st;
+   netplay_t          *netplay  = net_st->data;
+   settings_t         *settings = config_get_ptr();
+   GGPONetworkStats stats;
+#ifdef HAVE_MENU
+   bool menu_open               = menu_state_get_ptr()->flags &
+      MENU_ST_FLAG_ALIVE;
+#endif
+
+   net_st->ggpo_stats_valid = false;
+
+   if (!netplay || !settings->bools.netplay_ggpo_stats_show)
+      return;
+
+   if (netplay->modus != NETPLAY_MODUS_GGPO || !netplay->ggpo)
+      return;
+
+   if (!netplay->ggpo_running)
+      return;
+
+   /* Don't show the stats while in the menu. */
+#ifdef HAVE_MENU
+   if (menu_open)
+      return;
+#endif
+
+   if (!GGPO_SUCCEEDED(ggpo_get_network_stats(netplay->ggpo,
+         netplay->ggpo_remote_handle, &stats)))
+      return;
+
+   net_st->ggpo_stats_ping               = stats.network.ping;
+   net_st->ggpo_stats_send_queue_len     = stats.network.send_queue_len;
+   net_st->ggpo_stats_recv_queue_len     = stats.network.recv_queue_len;
+   net_st->ggpo_stats_local_frames_behind  = stats.timesync.local_frames_behind;
+   net_st->ggpo_stats_remote_frames_behind = stats.timesync.remote_frames_behind;
+   net_st->ggpo_stats_rollback_frames    = netplay->ggpo_rollback_frames;
+   net_st->ggpo_stats_valid              = true;
+}
+
+static void gfx_widget_netplay_ggpo_stats_frame(void *data, void *userdata)
+{
+   net_driver_state_t *net_st = &networking_driver_st;
+   settings_t         *settings = config_get_ptr();
+   video_frame_info_t *video_info = (video_frame_info_t*)data;
+   dispgfx_widget_t   *p_dispwidget = (dispgfx_widget_t*)userdata;
+   gfx_display_t      *p_disp = (gfx_display_t*)video_info->disp_userdata;
+   gfx_widget_font_data_t *font = &p_dispwidget->gfx_widget_fonts.regular;
+   int ping = net_st->ggpo_stats_ping;
+   int send_queue = net_st->ggpo_stats_send_queue_len;
+   int recv_queue = net_st->ggpo_stats_recv_queue_len;
+   int local_behind = net_st->ggpo_stats_local_frames_behind;
+   int remote_behind = net_st->ggpo_stats_remote_frames_behind;
+   uint32_t rollback_frames = net_st->ggpo_stats_rollback_frames;
+   char line1[64];
+   char line2[64];
+   size_t line1_len;
+   size_t line2_len;
+   int line1_width;
+   int line2_width;
+   int total_width;
+   unsigned line_height = p_dispwidget->simple_widget_height;
+   unsigned total_height = line_height * 2;
+   unsigned ping_offset = settings->bools.netplay_ping_show ? line_height : 0;
+   int y;
+
+   if (!net_st->ggpo_stats_valid)
+      return;
+
+   if (ping > 999)
+      ping = 999;
+   if (ping < 0)
+      ping = 0;
+
+   line1_len = (size_t)snprintf(line1, sizeof(line1),
+         "GGPO PING: %dms  Q: %d/%d", ping, send_queue, recv_queue);
+   line2_len = (size_t)snprintf(line2, sizeof(line2),
+         "ROLLBACKS: %u  BEHIND: %d/%d",
+         rollback_frames, local_behind, remote_behind);
+
+   line1_width = font_driver_get_message_width(
+         font->font, line1, line1_len, 1.0f);
+   line2_width = font_driver_get_message_width(
+         font->font, line2, line2_len, 1.0f);
+   total_width = (line1_width > line2_width ? line1_width : line2_width)
+         + p_dispwidget->simple_widget_padding * 2;
+
+   y = (int)video_info->height - (int)total_height - (int)ping_offset;
+   if (y < 0)
+      y = 0;
+
+   gfx_display_set_alpha(p_dispwidget->backdrop_orig, DEFAULT_BACKDROP);
+   gfx_display_draw_quad(
+         p_disp,
+         video_info->userdata,
+         video_info->width,
+         video_info->height,
+         video_info->width - total_width,
+         y,
+         total_width,
+         total_height,
+         video_info->width,
+         video_info->height,
+         p_dispwidget->backdrop_orig,
+         NULL);
+
+   gfx_widgets_draw_text(
+         font,
+         line1,
+         video_info->width - line1_width - p_dispwidget->simple_widget_padding,
+         (float)y + (line_height / 2.0f) + font->line_centre_offset,
+         video_info->width,
+         video_info->height,
+         0xFFFFFFFF,
+         TEXT_ALIGN_LEFT,
+         true);
+
+   gfx_widgets_draw_text(
+         font,
+         line2,
+         video_info->width - line2_width - p_dispwidget->simple_widget_padding,
+         (float)y + line_height + (line_height / 2.0f) + font->line_centre_offset,
+         video_info->width,
+         video_info->height,
+         0xFFFFFFFF,
+         TEXT_ALIGN_LEFT,
+         true);
+}
+#endif
+
 const gfx_widget_t gfx_widget_netplay_chat = {
    NULL,
    NULL,
@@ -10923,4 +11059,16 @@ const gfx_widget_t gfx_widget_netplay_ping = {
    &gfx_widget_netplay_ping_iterate,
    &gfx_widget_netplay_ping_frame
 };
+
+#ifdef HAVE_GGPO
+const gfx_widget_t gfx_widget_netplay_ggpo_stats = {
+   NULL,
+   NULL,
+   NULL,
+   NULL,
+   NULL,
+   &gfx_widget_netplay_ggpo_stats_iterate,
+   &gfx_widget_netplay_ggpo_stats_frame
+};
+#endif
 #endif

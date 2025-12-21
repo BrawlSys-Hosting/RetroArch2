@@ -5996,6 +5996,14 @@ MSG_HASH(
    "Display the ping for the current netplay room."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_STATS_SHOW,
+   "Display GGPO Stats"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_GGPO_STATS_SHOW,
+   "Display rollback and latency statistics for GGPO netplay."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_MENU_SHOW_LOAD_CONTENT_ANIMATION,
    "\"Load Content\" Startup Notification"
    )

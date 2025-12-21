@@ -1274,6 +1274,7 @@
 
 /* Enables displaying the current netplay room ping. */
 #define DEFAULT_NETPLAY_PING_SHOW false
+#define DEFAULT_NETPLAY_GGPO_STATS_SHOW false
 
 /* Enables use of rewind. This will incur some memory footprint
  * depending on the save state buffer. */

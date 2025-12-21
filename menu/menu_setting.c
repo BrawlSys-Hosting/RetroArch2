@@ -17050,6 +17050,26 @@ static bool setting_append_list(
 
 #ifdef HAVE_GFX_WIDGETS
 #ifdef HAVE_NETWORKING
+#ifdef HAVE_GGPO
+         CONFIG_BOOL(
+               list, list_info,
+               &settings->bools.netplay_ggpo_stats_show,
+               MENU_ENUM_LABEL_NETPLAY_GGPO_STATS_SHOW,
+               MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_STATS_SHOW,
+               DEFAULT_NETPLAY_GGPO_STATS_SHOW,
+               MENU_ENUM_LABEL_VALUE_OFF,
+               MENU_ENUM_LABEL_VALUE_ON,
+               &group_info,
+               &subgroup_info,
+               parent_group,
+               general_write_handler,
+               general_read_handler,
+               SD_FLAG_NONE);
+         (*list)[list_info->index - 1].action_ok    = &setting_bool_action_left_with_refresh;
+         (*list)[list_info->index - 1].action_left  = &setting_bool_action_left_with_refresh;
+         (*list)[list_info->index - 1].action_right = &setting_bool_action_right_with_refresh;
+#endif
+
          CONFIG_BOOL(
                list, list_info,
                &settings->bools.netplay_ping_show,

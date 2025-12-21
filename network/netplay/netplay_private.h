@@ -706,6 +706,7 @@ struct netplay
    uint32_t ggpo_player_count;
    uint32_t ggpo_disconnect_flags;
    uint32_t ggpo_stall_frames;
+   uint32_t ggpo_rollback_frames;
    uint32_t ggpo_local_player_index;
    uint32_t ggpo_remote_player_index;
    uint32_t ggpo_local_devices;

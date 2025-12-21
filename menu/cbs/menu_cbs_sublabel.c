@@ -410,6 +410,7 @@ DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_framecount_show,               MENU_
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_memory_show,                   MENU_ENUM_SUBLABEL_MEMORY_SHOW)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_memory_update_interval,        MENU_ENUM_SUBLABEL_MEMORY_UPDATE_INTERVAL)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_statistics_show,               MENU_ENUM_SUBLABEL_STATISTICS_SHOW)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_stats_show,        MENU_ENUM_SUBLABEL_NETPLAY_GGPO_STATS_SHOW)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ping_show,             MENU_ENUM_SUBLABEL_NETPLAY_PING_SHOW)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_settings,              MENU_ENUM_SUBLABEL_NETPLAY)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_input_retropad_settings,       MENU_ENUM_SUBLABEL_INPUT_RETROPAD_BINDS)
@@ -5144,6 +5145,9 @@ int menu_cbs_init_bind_sublabel(menu_file_list_cbs_t *cbs,
             break;
          case MENU_ENUM_LABEL_VIDEO_MAX_FRAME_LATENCY:
             BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_max_frame_latency);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_GGPO_STATS_SHOW:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_ggpo_stats_show);
             break;
          case MENU_ENUM_LABEL_NETPLAY_PING_SHOW:
             BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_ping_show);

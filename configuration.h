@@ -939,6 +939,7 @@ typedef struct settings
       bool netplay_use_ggpo;
       bool netplay_request_devices[MAX_USERS];
       bool netplay_ping_show;
+      bool netplay_ggpo_stats_show;
 
       /* Network */
       bool network_buildbot_auto_extract_archive;

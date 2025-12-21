@@ -1707,6 +1707,10 @@ MSG_HASH(
    "netplay_ping_show"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_NETPLAY_GGPO_STATS_SHOW,
+   "netplay_ggpo_stats_show"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_FRAME_THROTTLE_ENABLE,
    "fastforward_ratio_throttle_enable"
    )
