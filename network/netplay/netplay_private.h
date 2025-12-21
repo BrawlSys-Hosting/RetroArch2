@@ -713,6 +713,7 @@ struct netplay
    uint32_t ggpo_remote_devices;
    uint32_t *ggpo_sync_inputs;
    uint32_t *ggpo_local_input;
+   uint16_t ggpo_base_port;
    bool ggpo_running;
    bool ggpo_in_rollback;
 #endif

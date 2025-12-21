@@ -5964,14 +5964,16 @@ static bool netplay_get_cmd(netplay_t *netplay,
             {
                /* When a core uses the netpacket interface this is OK */
                if (frame != netplay->server_frame_count
-                     && netplay->modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE)
+                     && netplay->modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE
+                     && netplay->modus != NETPLAY_MODUS_GGPO)
                {
                   RARCH_ERR("[Netplay] Received mode change out of order.\n");
                   return netplay_cmd_nak(netplay, connection);
                }
 
                /* Hooray, I get to play now! */
-               if (netplay->self_mode == NETPLAY_CONNECTION_PLAYING)
+               if (netplay->self_mode == NETPLAY_CONNECTION_PLAYING
+                     && netplay->modus != NETPLAY_MODUS_GGPO)
                {
                   RARCH_ERR("[Netplay] Received player mode change even though I'm already a player.\n");
                   return netplay_cmd_nak(netplay, connection);
@@ -6087,7 +6089,8 @@ static bool netplay_get_cmd(netplay_t *netplay,
             {
                /* When a core uses the netpacket interface this is OK */
                if (     frame != netplay->server_frame_count
-                     && netplay->modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE)
+                     && netplay->modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE
+                     && netplay->modus != NETPLAY_MODUS_GGPO)
                {
                   RARCH_ERR("[Netplay] Received mode change out of order.\n");
                   return netplay_cmd_nak(netplay, connection);
@@ -6952,15 +6955,23 @@ static void netplay_announce_nat_traversal(netplay_t *netplay,
       uint16_t ext_port)
 {
    net_driver_state_t *net_st = &networking_driver_st;
+   struct nat_traversal_data *nat = &net_st->nat_traversal_request;
+   struct sockaddr_in *addr = &nat->request.addr;
+   uint16_t announce_port = ext_port;
 
    /* Start announcing immediately. */
    netplay->next_announce = cpu_features_get_time_usec();
 
    if (net_st->nat_traversal_request.status == NAT_TRAVERSAL_STATUS_OPENED)
    {
-      struct sockaddr_in *addr = &net_st->nat_traversal_request.request.addr;
+      if (nat->announce_ready)
+      {
+         addr = &nat->announce_addr;
+         if (nat->announce_port)
+            announce_port = nat->announce_port;
+      }
 
-      netplay->ext_tcp_port = ext_port;
+      netplay->ext_tcp_port = announce_port;
 
       if (!ipv4_is_cgnat_address(addr) && !ipv4_is_lan_address(addr))
       {
@@ -7002,9 +7013,75 @@ static void netplay_announce_nat_traversal(netplay_t *netplay,
 static void netplay_init_nat_traversal(netplay_t *netplay)
 {
    net_driver_state_t *net_st = &networking_driver_st;
+   struct nat_traversal_data *nat = &net_st->nat_traversal_request;
+   uint16_t tcp_port = netplay->tcp_port;
 
-   task_push_netplay_nat_traversal(&net_st->nat_traversal_request,
-      netplay->tcp_port);
+   memset(nat->ports, 0, sizeof(nat->ports));
+   memset(nat->protos, 0, sizeof(nat->protos));
+   memset(nat->forward_types, 0, sizeof(nat->forward_types));
+   nat->port_count   = 0;
+   nat->port_index   = 0;
+   nat->close_index  = 0;
+   nat->announce_index = 0;
+   nat->announce_port = 0;
+   nat->announce_ready = false;
+   memset(&nat->announce_addr, 0, sizeof(nat->announce_addr));
+   memset(&nat->internal_addr, 0, sizeof(nat->internal_addr));
+
+#ifdef HAVE_GGPO
+   if (netplay->modus == NETPLAY_MODUS_GGPO)
+   {
+      uint16_t ggpo_port = netplay->ggpo_base_port;
+
+      if (!ggpo_port)
+         ggpo_port = tcp_port;
+
+      if (netplay->is_server)
+      {
+         if (ggpo_port && nat->port_count < NAT_TRAVERSAL_MAX_PORTS)
+         {
+            nat->ports[nat->port_count]  = ggpo_port;
+            nat->protos[nat->port_count] = SOCKET_PROTOCOL_UDP;
+            nat->forward_types[nat->port_count] = NATT_FORWARD_TYPE_NONE;
+            nat->port_count++;
+         }
+
+         if (tcp_port && nat->port_count < NAT_TRAVERSAL_MAX_PORTS)
+         {
+            nat->ports[nat->port_count]  = tcp_port;
+            nat->protos[nat->port_count] = SOCKET_PROTOCOL_TCP;
+            nat->forward_types[nat->port_count] = NATT_FORWARD_TYPE_ANY;
+            nat->announce_index          = nat->port_count;
+            nat->port_count++;
+         }
+         else
+            nat->announce_index = 0;
+      }
+      else
+      {
+         if (ggpo_port && ggpo_port < UINT16_MAX)
+         {
+            nat->ports[nat->port_count]  = (uint16_t)(ggpo_port + 1);
+            nat->protos[nat->port_count] = SOCKET_PROTOCOL_UDP;
+            nat->forward_types[nat->port_count] = NATT_FORWARD_TYPE_NONE;
+            nat->port_count++;
+         }
+      }
+   }
+#endif
+
+   if (!nat->port_count)
+   {
+      if (!tcp_port)
+         return;
+      nat->ports[0]  = tcp_port;
+      nat->protos[0] = SOCKET_PROTOCOL_TCP;
+      nat->forward_types[0] = NATT_FORWARD_TYPE_ANY;
+      nat->port_count = 1;
+      nat->announce_index = 0;
+   }
+
+   task_push_netplay_nat_traversal(nat, nat->ports[0]);
 }
 
 static void netplay_deinit_nat_traversal(void)
@@ -7656,6 +7733,8 @@ static bool netplay_ggpo_init_session(netplay_t *netplay,
       return false;
    }
 
+   netplay->ggpo_base_port = port;
+
    if (netplay->is_server)
    {
       local_port = port;
@@ -8010,6 +8089,8 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
 
    if (netplay->modus == NETPLAY_MODUS_GGPO)
    {
+      if (!init_tcp_socket(netplay, server, mitm, port))
+         goto failure;
       if (!netplay_init_buffers(netplay))
          goto failure;
       if (!netplay_ggpo_init_session(netplay, server, port))
@@ -9521,6 +9602,102 @@ static void netplay_disconnect(netplay_t *netplay)
 }
 
 #ifdef HAVE_GGPO
+static void netplay_ggpo_poll_control(netplay_t *netplay)
+{
+   if (!netplay)
+      return;
+
+   if (netplay->is_server)
+   {
+      int new_fd = -1;
+      netplay_address_t new_addr = {0};
+      bool server_err = false;
+
+      if (netplay->mitm_handler)
+         new_fd = handle_mitm_connection(netplay, &new_addr, &server_err);
+      else
+         new_fd = handle_connection(netplay, &new_addr, &server_err);
+
+      if (!server_err && new_fd >= 0)
+      {
+         struct netplay_connection *connection;
+
+         if (netplay_banned(netplay, new_fd, &new_addr))
+         {
+            socket_close(new_fd);
+         }
+         else if (netplay_full(netplay, new_fd))
+         {
+            socket_close(new_fd);
+         }
+         else
+         {
+            connection = allocate_connection(netplay);
+            if (!connection)
+               socket_close(new_fd);
+            else if (   !netplay_init_socket_buffer(
+                           &connection->send_packet_buffer,
+                           netplay->packet_buffer_size)
+                     || !netplay_init_socket_buffer(
+                           &connection->recv_packet_buffer,
+                           netplay->packet_buffer_size))
+            {
+               netplay_deinit_socket_buffer(&connection->send_packet_buffer);
+               netplay_deinit_socket_buffer(&connection->recv_packet_buffer);
+               socket_close(new_fd);
+            }
+            else
+            {
+               connection->flags |= NETPLAY_CONN_FLAG_ACTIVE;
+               connection->fd     = new_fd;
+               connection->mode   = NETPLAY_CONNECTION_INIT;
+
+               memcpy(&connection->addr, &new_addr, sizeof(connection->addr));
+            }
+         }
+      }
+   }
+
+   if (netplay->connections_size)
+      netplay_poll_net_input(netplay);
+
+   if (netplay->is_server)
+   {
+      settings_t *settings = config_get_ptr();
+
+#if defined(HAVE_NETPLAYDISCOVERY) && !defined(VITA)
+      if (!netplay->mitm_handler)
+      {
+         net_driver_state_t *net_st = &networking_driver_st;
+
+         if (net_st->lan_ad_server_fd >= 0 || init_lan_ad_server_socket())
+            netplay_lan_ad_server(netplay);
+      }
+#endif
+
+      if (settings->bools.netplay_public_announce &&
+            netplay->next_announce != -1)
+      {
+         if (cpu_features_get_time_usec() >= netplay->next_announce)
+            netplay_announce(netplay);
+      }
+   }
+   else if (netplay->connections_size &&
+         (netplay->connections[0].flags & NETPLAY_CONN_FLAG_ACTIVE))
+   {
+      if (netplay->next_ping != -1)
+      {
+         retro_time_t ctime = cpu_features_get_time_usec();
+
+         if (ctime >= netplay->next_ping)
+         {
+            netplay_request_ping(netplay, &netplay->connections[0]);
+            netplay->next_ping = ctime + NETPLAY_PING_TIME;
+         }
+      }
+   }
+}
+
 static bool netplay_ggpo_pre_frame(netplay_t *netplay)
 {
    GGPOErrorCode result;
@@ -9528,6 +9705,8 @@ static bool netplay_ggpo_pre_frame(netplay_t *netplay)
 
    if (!netplay || !netplay->ggpo)
       return true;
+
+   netplay_ggpo_poll_control(netplay);
 
    if (netplay->ggpo_in_rollback)
       return true;
@@ -9729,10 +9908,18 @@ void deinit_netplay(void)
 {
    net_driver_state_t *net_st  = &networking_driver_st;
    netplay_t          *netplay = net_st->data;
+#ifdef HAVE_GGPO
+   settings_t         *settings = config_get_ptr();
+#endif
 
    if (netplay)
    {
-      if (netplay->nat_traversal)
+      if (netplay->nat_traversal
+#ifdef HAVE_GGPO
+            || (netplay->modus == NETPLAY_MODUS_GGPO &&
+               settings->bools.netplay_nat_traversal)
+#endif
+         )
          netplay_deinit_nat_traversal();
 
       netplay_free(netplay);
@@ -9881,6 +10068,24 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
          msg_hash_to_str(MSG_CONNECTING_TO_NETPLAY_HOST);
       runloop_msg_queue_push(_msg, strlen(_msg), 0, 180, false, NULL,
          MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+
+      if (netplay->is_server)
+      {
+         if (settings->bools.netplay_nat_traversal)
+            netplay_init_nat_traversal(netplay);
+         else
+            netplay->next_announce =
+               cpu_features_get_time_usec() + NETPLAY_ANNOUNCE_AFTER;
+         return true;
+      }
+
+      /* Start our control channel handshake */
+      if (!netplay_handshake_init_send(netplay, &netplay->connections[0],
+            LOW_NETPLAY_PROTOCOL_VERSION))
+         goto failure;
+
+      netplay->connections[0].mode = NETPLAY_CONNECTION_INIT;
+      netplay->self_mode           = NETPLAY_CONNECTION_INIT;
       return true;
    }
 
@@ -10340,7 +10545,8 @@ bool netplay_driver_ctl(enum rarch_netplay_ctl_state state, void *data)
          break;
 
       case RARCH_NETPLAY_CTL_PLAYER_CHAT:
-         if (netplay && netplay->modus == NETPLAY_MODUS_INPUT_FRAME_SYNC)
+         if (netplay && (netplay->modus == NETPLAY_MODUS_INPUT_FRAME_SYNC
+               || netplay->modus == NETPLAY_MODUS_GGPO))
             netplay_input_chat(netplay);
          else
             ret = false;

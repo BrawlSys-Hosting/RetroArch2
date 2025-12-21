@@ -43,6 +43,8 @@ enum nat_traversal_status
    NAT_TRAVERSAL_STATUS_CLOSED
 };
 
+#define NAT_TRAVERSAL_MAX_PORTS 3
+
 struct natt_discovery
 {
    retro_time_t timeout;
@@ -70,9 +72,20 @@ struct natt_request
 /* Use this struct to implement a higher-level interface. */
 struct nat_traversal_data
 {
+   struct sockaddr_in internal_addr;
+   struct sockaddr_in announce_addr;
    struct natt_request request;
+   enum socket_protocol protos[NAT_TRAVERSAL_MAX_PORTS];
+   uint16_t ports[NAT_TRAVERSAL_MAX_PORTS];
+   enum natt_forward_type forward_types[NAT_TRAVERSAL_MAX_PORTS];
    enum natt_forward_type forward_type;
    enum nat_traversal_status status;
+   unsigned port_count;
+   unsigned port_index;
+   unsigned announce_index;
+   unsigned close_index;
+   uint16_t announce_port;
+   bool announce_ready;
 };
 
 /**

@@ -195,6 +195,9 @@ static void task_netplay_nat_traversal_handler(retro_task_t *task)
             if (!find_local_address(&device, &data->request))
                break;
 
+            data->internal_addr = data->request.addr;
+            data->port_index = 0;
+
             data->status = NAT_TRAVERSAL_STATUS_QUERY_DEVICE;
          }
          break;
@@ -234,6 +237,19 @@ static void task_netplay_nat_traversal_handler(retro_task_t *task)
                break;
             }
 
+            if (data->port_index >= data->port_count)
+            {
+               data->status = NAT_TRAVERSAL_STATUS_SELECT_DEVICE;
+               break;
+            }
+
+            data->forward_type = data->forward_types[data->port_index];
+            data->request.addr = data->internal_addr;
+            data->request.addr.sin_port =
+               htons(data->ports[data->port_index]);
+            data->request.proto = data->protos[data->port_index];
+            data->request.success = false;
+
             if (natt_open_port(&device, &data->request,
                   data->forward_type, false))
                data->status = NAT_TRAVERSAL_STATUS_OPENING;
@@ -246,12 +262,27 @@ static void task_netplay_nat_traversal_handler(retro_task_t *task)
          {
             if (data->request.success)
             {
-               natt_device_end(&discovery);
-
                /* Copy the external address into the request. */
                memcpy(&data->request.addr.sin_addr,
                   &device.ext_addr.sin_addr,
                   sizeof(data->request.addr.sin_addr));
+
+               if (data->port_index == data->announce_index)
+               {
+                  data->announce_addr  = data->request.addr;
+                  data->announce_port  =
+                     (uint16_t)ntohs(data->request.addr.sin_port);
+                  data->announce_ready = true;
+               }
+
+               if (data->port_index + 1 < data->port_count)
+               {
+                  data->port_index++;
+                  data->status = NAT_TRAVERSAL_STATUS_OPEN;
+                  break;
+               }
+
+               natt_device_end(&discovery);
 
                data->status = NAT_TRAVERSAL_STATUS_OPENED;
 
@@ -259,16 +290,29 @@ static void task_netplay_nat_traversal_handler(retro_task_t *task)
             }
             else if (data->forward_type == NATT_FORWARD_TYPE_ANY)
             {
+               data->forward_types[data->port_index] = NATT_FORWARD_TYPE_NONE;
                data->forward_type = NATT_FORWARD_TYPE_NONE;
                data->status       = NAT_TRAVERSAL_STATUS_OPEN;
             }
             else
                data->status       = NAT_TRAVERSAL_STATUS_SELECT_DEVICE;
-         }
+        }
          break;
 
       case NAT_TRAVERSAL_STATUS_CLOSE:
          {
+            if (data->close_index >= data->port_count)
+            {
+               data->status = NAT_TRAVERSAL_STATUS_CLOSED;
+               goto finished;
+            }
+
+            data->request.addr.sin_family = AF_INET;
+            data->request.addr.sin_port =
+               htons(data->ports[data->close_index]);
+            data->request.proto = data->protos[data->close_index];
+            data->request.success = false;
+
             natt_close_port(&device, &data->request, false);
 
             data->status = NAT_TRAVERSAL_STATUS_CLOSING;
@@ -277,6 +321,14 @@ static void task_netplay_nat_traversal_handler(retro_task_t *task)
 
       case NAT_TRAVERSAL_STATUS_CLOSING:
          {
+            data->close_index++;
+
+            if (data->close_index < data->port_count)
+            {
+               data->status = NAT_TRAVERSAL_STATUS_CLOSE;
+               break;
+            }
+
             memset(&data->request, 0, sizeof(data->request));
 
             data->status = NAT_TRAVERSAL_STATUS_CLOSED;
@@ -300,10 +352,19 @@ static void task_netplay_nat_traversal_callback(retro_task_t *task,
       void *task_data, void *user_data, const char *error)
 {
    struct nat_traversal_data *data = (struct nat_traversal_data*)task_data;
-   uintptr_t ext_port              = ntohs(data->request.addr.sin_port);
+   uint16_t ext_port               = 0;
+
+   if (data->announce_ready)
+   {
+      data->request.addr = data->announce_addr;
+      data->request.addr.sin_port = htons(data->announce_port);
+      ext_port = data->announce_port;
+   }
+   else
+      ext_port = (uint16_t)ntohs(data->request.addr.sin_port);
 
    netplay_driver_ctl(RARCH_NETPLAY_CTL_FINISHED_NAT_TRAVERSAL,
-      (void*)ext_port);
+      (void*)(uintptr_t)ext_port);
 }
 
 static bool nat_task_finder(retro_task_t *task, void *userdata)
@@ -333,11 +394,26 @@ bool task_push_netplay_nat_traversal(void *data, uint16_t port)
    if (!task)
       return false;
 
-   natt_data->request.addr.sin_family   = AF_INET;
-   natt_data->request.addr.sin_port     = htons(port);
-   natt_data->request.proto             = SOCKET_PROTOCOL_TCP;
-   natt_data->request.device            = NULL;
-   natt_data->status                    = NAT_TRAVERSAL_STATUS_DISCOVERY;
+   if (!natt_data->port_count)
+   {
+      natt_data->ports[0]      = port;
+      natt_data->protos[0]     = SOCKET_PROTOCOL_TCP;
+      natt_data->forward_types[0] = NATT_FORWARD_TYPE_ANY;
+      natt_data->port_count    = 1;
+      natt_data->announce_index = 0;
+   }
+
+   natt_data->port_index              = 0;
+   natt_data->close_index             = 0;
+   natt_data->announce_ready          = false;
+   natt_data->announce_port           = 0;
+   memset(&natt_data->announce_addr, 0, sizeof(natt_data->announce_addr));
+
+   natt_data->request.addr.sin_family = AF_INET;
+   natt_data->request.addr.sin_port   = htons(natt_data->ports[0]);
+   natt_data->request.proto           = natt_data->protos[0];
+   natt_data->request.device          = NULL;
+   natt_data->status                  = NAT_TRAVERSAL_STATUS_DISCOVERY;
 
    task->handler                        = task_netplay_nat_traversal_handler;
    task->callback                       = task_netplay_nat_traversal_callback;
@@ -358,19 +434,16 @@ bool task_push_netplay_nat_close(void *data)
 
    if (natt_data->status != NAT_TRAVERSAL_STATUS_OPENED)
       return false;
-   if (natt_data->request.addr.sin_family != AF_INET)
+   if (!natt_data->port_count)
       return false;
-   if (!natt_data->request.addr.sin_port)
-      return false;
-   if (natt_data->request.proto != SOCKET_PROTOCOL_TCP)
-      return false;
-   if (!natt_data->request.device)
+   if (!natt_data->ports[0])
       return false;
 
    task = task_init();
    if (!task)
       return false;
 
+   natt_data->close_index = 0;
    natt_data->status = NAT_TRAVERSAL_STATUS_CLOSE;
 
    task->handler     = task_netplay_nat_traversal_handler;

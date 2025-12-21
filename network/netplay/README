@@ -442,5 +442,9 @@ two-player session. The peer address must be provided via netplay_ip_address
 netplay_port, the client binds netplay_port + 1, and each side targets the
 opposite port. Inputs are mapped to port 1 on the host and port 2 on the
 client, with the opposite port treated as remote input; both peers must have
-the same input device setup on those ports. Spectator mode, chat relay, and
-MITM/lobby features are not available in GGPO mode.
+the same input device setup on those ports. With NAT traversal enabled, RetroArch
+attempts to open the GGPO UDP port (host base, client base + 1) via UPnP, while
+hosts still open the TCP control port for lobby announcements. Chat relay and
+lobby announcements are supported via a parallel TCP control channel for direct
+sessions.
+Spectator mode and MITM/relay features are not available in GGPO mode.
