@@ -1705,6 +1705,10 @@ static struct config_path_setting *populate_settings_path(
 
 #ifdef HAVE_NETWORKING
    SETTING_PATH("netplay_ip_address",            settings->paths.netplay_server, false, NULL, true);
+   SETTING_PATH("netplay_rendezvous_server",     settings->paths.netplay_rendezvous_server, false, DEFAULT_NETPLAY_RENDEZVOUS_SERVER, true);
+   SETTING_PATH("netplay_rendezvous_room",       settings->paths.netplay_rendezvous_room, false, DEFAULT_NETPLAY_RENDEZVOUS_ROOM, true);
+   SETTING_PATH("netplay_ggpo_relay_server",     settings->paths.netplay_ggpo_relay_server, false, DEFAULT_NETPLAY_GGPO_RELAY_SERVER, true);
+   SETTING_PATH("netplay_ggpo_relay_session",    settings->paths.netplay_ggpo_relay_session, false, DEFAULT_NETPLAY_GGPO_RELAY_SESSION, true);
    SETTING_PATH("netplay_custom_mitm_server",    settings->paths.netplay_custom_mitm_server, false, NULL, true);
    SETTING_PATH("netplay_nickname",              settings->paths.username, false, NULL, true);
    SETTING_PATH("netplay_password",              settings->paths.netplay_password, false, NULL, true);
@@ -2229,6 +2233,8 @@ static struct config_bool_setting *populate_settings_bool(
    SETTING_BOOL("netplay_allow_slaves",          &settings->bools.netplay_allow_slaves, true, DEFAULT_NETPLAY_ALLOW_SLAVES, false);
    SETTING_BOOL("netplay_require_slaves",        &settings->bools.netplay_require_slaves, true, DEFAULT_NETPLAY_REQUIRE_SLAVES, false);
    SETTING_BOOL("netplay_use_mitm_server",       &settings->bools.netplay_use_mitm_server, true, DEFAULT_NETPLAY_USE_MITM_SERVER, false);
+   SETTING_BOOL("netplay_use_rendezvous",        &settings->bools.netplay_use_rendezvous, true, DEFAULT_NETPLAY_USE_RENDEZVOUS, false);
+   SETTING_BOOL("netplay_use_ggpo_relay",        &settings->bools.netplay_use_ggpo_relay, true, DEFAULT_NETPLAY_USE_GGPO_RELAY, false);
    SETTING_BOOL("netplay_use_ggpo",              &settings->bools.netplay_use_ggpo, true, DEFAULT_NETPLAY_USE_GGPO, false);
    SETTING_BOOL("netplay_request_device_p1",     &settings->bools.netplay_request_devices[0], true, false, false);
    SETTING_BOOL("netplay_request_device_p2",     &settings->bools.netplay_request_devices[1], true, false, false);
@@ -2600,6 +2606,8 @@ static struct config_uint_setting *populate_settings_uint(
 #ifdef HAVE_NETWORKING
    SETTING_UINT("netplay_ip_port",                    &settings->uints.netplay_port, true, RARCH_DEFAULT_PORT, false);
    SETTING_OVERRIDE(RARCH_OVERRIDE_SETTING_NETPLAY_IP_PORT);
+   SETTING_UINT("netplay_rendezvous_port",            &settings->uints.netplay_rendezvous_port, true, DEFAULT_NETPLAY_RENDEZVOUS_PORT, false);
+   SETTING_UINT("netplay_ggpo_relay_port",            &settings->uints.netplay_ggpo_relay_port, true, DEFAULT_NETPLAY_GGPO_RELAY_PORT, false);
    SETTING_UINT("netplay_max_connections",            &settings->uints.netplay_max_connections, true, DEFAULT_NETPLAY_MAX_CONNECTIONS, false);
    SETTING_UINT("netplay_max_ping",                   &settings->uints.netplay_max_ping, true, DEFAULT_NETPLAY_MAX_PING, false);
    SETTING_UINT("netplay_chat_color_name",            &settings->uints.netplay_chat_color_name, true, DEFAULT_NETPLAY_CHAT_COLOR_NAME, false);

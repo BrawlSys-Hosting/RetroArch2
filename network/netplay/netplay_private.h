@@ -30,6 +30,7 @@
 #ifdef HAVE_GGPO
 typedef struct GGPOSession GGPOSession;
 typedef int GGPOPlayerHandle;
+struct addrinfo;
 #endif
 
 #ifndef VITA
@@ -714,8 +715,19 @@ struct netplay
    uint32_t *ggpo_sync_inputs;
    uint32_t *ggpo_local_input;
    uint16_t ggpo_base_port;
+   uint16_t ggpo_peer_port;
+   int ggpo_rendezvous_fd;
+   struct addrinfo *ggpo_rendezvous_addr;
+   retro_time_t ggpo_rendezvous_next_send;
+   char ggpo_peer_address[NETPLAY_HOST_LONGSTR_LEN];
+   char ggpo_relay_session[NETPLAY_HOST_STR_LEN];
+   int ggpo_relay_fd;
+   struct addrinfo *ggpo_relay_addr;
+   retro_time_t ggpo_relay_next_send;
    bool ggpo_running;
    bool ggpo_in_rollback;
+   bool ggpo_rendezvous_active;
+   bool ggpo_relay_active;
 #endif
 };
 

@@ -223,6 +223,8 @@ typedef struct settings
       unsigned input_max_users;
 
       unsigned netplay_port;
+      unsigned netplay_rendezvous_port;
+      unsigned netplay_ggpo_relay_port;
       unsigned netplay_max_connections;
       unsigned netplay_max_ping;
       unsigned netplay_chat_color_name;
@@ -557,6 +559,10 @@ typedef struct settings
       char streaming_title[512]; /* TODO/FIXME - check size */
 
       char netplay_server[NAME_MAX_LENGTH];
+      char netplay_rendezvous_server[NAME_MAX_LENGTH];
+      char netplay_rendezvous_room[NAME_MAX_LENGTH];
+      char netplay_ggpo_relay_server[NAME_MAX_LENGTH];
+      char netplay_ggpo_relay_session[NAME_MAX_LENGTH];
       char netplay_custom_mitm_server[NAME_MAX_LENGTH];
       char network_buildbot_url[NAME_MAX_LENGTH];
       char network_buildbot_assets_url[NAME_MAX_LENGTH];
@@ -936,6 +942,8 @@ typedef struct settings
       bool netplay_require_slaves;
       bool netplay_nat_traversal;
       bool netplay_use_mitm_server;
+      bool netplay_use_rendezvous;
+      bool netplay_use_ggpo_relay;
       bool netplay_use_ggpo;
       bool netplay_request_devices[MAX_USERS];
       bool netplay_ping_show;

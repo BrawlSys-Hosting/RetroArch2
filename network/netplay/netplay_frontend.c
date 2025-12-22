@@ -85,6 +85,19 @@
 #ifdef HAVE_GGPO
 #include <ggponet.h>
 #define GGPO_INPUT_MAX_BYTES 15
+#define GGPO_RENDEZVOUS_MAGIC "RNDV1"
+#define GGPO_RENDEZVOUS_RETRY_USEC 1000000
+#define GGPO_RENDEZVOUS_CLIENT_TIMEOUT_USEC 10000000
+#define GGPO_RENDEZVOUS_MAX_MSG 256
+#define GGPO_RELAY_MAGIC "RARELAY1"
+#define GGPO_RELAY_RETRY_USEC 1000000
+#define GGPO_RELAY_MAX_MSG 256
+#ifndef DEFAULT_NETPLAY_RENDEZVOUS_PORT
+#define DEFAULT_NETPLAY_RENDEZVOUS_PORT 7000
+#endif
+#ifndef DEFAULT_NETPLAY_GGPO_RELAY_PORT
+#define DEFAULT_NETPLAY_GGPO_RELAY_PORT 7001
+#endif
 #endif
 
 #ifdef TCP_NODELAY
@@ -228,6 +241,14 @@ static void netplay_disconnect(netplay_t *netplay);
 #ifdef HAVE_GGPO
 static bool netplay_ggpo_init_session(netplay_t *netplay,
       const char *peer_address, uint16_t port);
+static bool netplay_ggpo_rendezvous_resolve_peer(char *peer_address,
+      size_t peer_address_size, uint16_t *peer_port, uint16_t local_port);
+static bool netplay_ggpo_rendezvous_start(netplay_t *netplay, uint16_t port);
+static bool netplay_ggpo_rendezvous_poll(netplay_t *netplay);
+static void netplay_ggpo_rendezvous_close(netplay_t *netplay);
+static bool netplay_ggpo_relay_start(netplay_t *netplay, uint16_t port);
+static bool netplay_ggpo_relay_poll(netplay_t *netplay);
+static void netplay_ggpo_relay_close(netplay_t *netplay);
 static bool netplay_ggpo_pre_frame(netplay_t *netplay);
 static void netplay_ggpo_post_frame(netplay_t *netplay);
 static int16_t netplay_input_state_ggpo(netplay_t *netplay,
@@ -2522,6 +2543,478 @@ static int16_t netplay_input_state_ggpo(netplay_t *netplay,
    }
 
    return 0;
+}
+
+static bool netplay_ggpo_rendezvous_enabled(void)
+{
+   settings_t *settings = config_get_ptr();
+
+   return settings->bools.netplay_use_rendezvous
+      && !settings->bools.netplay_use_ggpo_relay;
+}
+
+static bool netplay_ggpo_relay_enabled(void)
+{
+   settings_t *settings = config_get_ptr();
+
+   return settings->bools.netplay_use_ggpo_relay;
+}
+
+static bool netplay_ggpo_rendezvous_parse_peer(const char *buf,
+      char *peer_address, size_t peer_address_size, uint16_t *peer_port)
+{
+   char addr_buf[64];
+   unsigned port = 0;
+
+   if (!peer_address || !peer_port)
+      return false;
+
+   if (sscanf(buf, "PEER %63s %u", addr_buf, &port) != 2)
+      return false;
+
+   if (port > UINT16_MAX)
+      return false;
+
+   strlcpy(peer_address, addr_buf, peer_address_size);
+   *peer_port = (uint16_t)port;
+
+   return !string_is_empty(peer_address);
+}
+
+static bool netplay_ggpo_rendezvous_send(int fd, struct addrinfo *addr,
+      bool is_server, const char *room)
+{
+   char msg[GGPO_RENDEZVOUS_MAX_MSG];
+   char role = is_server ? 'H' : 'C';
+   int msg_len;
+
+   if (!addr || string_is_empty(room))
+      return false;
+
+   msg_len = snprintf(msg, sizeof(msg), "%s %c %s",
+         GGPO_RENDEZVOUS_MAGIC, role, room);
+   if (msg_len <= 0 || msg_len >= (int)sizeof(msg))
+      return false;
+
+   return sendto(fd, msg, msg_len, 0, addr->ai_addr, addr->ai_addrlen) == msg_len;
+}
+
+static bool netplay_ggpo_rendezvous_open_socket(uint16_t local_port,
+      const char *server, uint16_t server_port, int *out_fd,
+      struct addrinfo **out_addr)
+{
+   struct addrinfo *bind_addr = NULL;
+   struct addrinfo hints = {0};
+   char port_buf[6];
+   int fd = -1;
+
+   if (string_is_empty(server) || !out_fd || !out_addr)
+      return false;
+
+   fd = socket_init((void**)&bind_addr, local_port, NULL,
+         SOCKET_TYPE_DATAGRAM, AF_INET);
+   if (fd < 0 || !bind_addr)
+      goto error;
+
+   if (!socket_bind(fd, bind_addr))
+      goto error;
+
+   freeaddrinfo_retro(bind_addr);
+   bind_addr = NULL;
+
+   if (!socket_nonblock(fd))
+      goto error;
+
+   snprintf(port_buf, sizeof(port_buf), "%hu", (unsigned short)server_port);
+   hints.ai_family = AF_INET;
+   hints.ai_socktype = SOCK_DGRAM;
+   hints.ai_flags |= AI_NUMERICSERV;
+
+   if (getaddrinfo_retro(server, port_buf, &hints, out_addr) || !*out_addr)
+      goto error;
+
+   *out_fd = fd;
+   return true;
+
+error:
+   if (bind_addr)
+      freeaddrinfo_retro(bind_addr);
+   if (fd >= 0)
+      socket_close(fd);
+   return false;
+}
+
+static bool netplay_ggpo_rendezvous_resolve_peer(char *peer_address,
+      size_t peer_address_size, uint16_t *peer_port, uint16_t local_port)
+{
+   struct addrinfo *addr = NULL;
+   settings_t *settings = config_get_ptr();
+   const char *server = settings->paths.netplay_rendezvous_server;
+   const char *room = settings->paths.netplay_rendezvous_room;
+   uint16_t server_port = (uint16_t)settings->uints.netplay_rendezvous_port;
+   retro_time_t deadline;
+   retro_time_t next_send = 0;
+   int fd = -1;
+
+   if (string_is_empty(server) || string_is_empty(room))
+   {
+      RARCH_ERR("[Netplay] GGPO rendezvous requires server and room settings.\n");
+      return false;
+   }
+
+   if (!server_port)
+      server_port = DEFAULT_NETPLAY_RENDEZVOUS_PORT;
+
+   if (!netplay_ggpo_rendezvous_open_socket(local_port, server, server_port,
+         &fd, &addr))
+   {
+      RARCH_ERR("[Netplay] GGPO rendezvous failed to open socket.\n");
+      return false;
+   }
+
+   deadline = cpu_features_get_time_usec() +
+      GGPO_RENDEZVOUS_CLIENT_TIMEOUT_USEC;
+
+   while (cpu_features_get_time_usec() < deadline)
+   {
+      char buf[GGPO_RENDEZVOUS_MAX_MSG];
+      struct sockaddr_storage from = {0};
+      socklen_t from_len = sizeof(from);
+      ssize_t recvd;
+      bool ready = false;
+      retro_time_t now = cpu_features_get_time_usec();
+
+      if (now >= next_send)
+      {
+         netplay_ggpo_rendezvous_send(fd, addr, false, room);
+         next_send = now + GGPO_RENDEZVOUS_RETRY_USEC;
+      }
+
+      if (!socket_wait(fd, &ready, NULL, 100) || !ready)
+         continue;
+
+      for (;;)
+      {
+         recvd = recvfrom(fd, buf, sizeof(buf) - 1, 0,
+            (struct sockaddr*)&from, &from_len);
+         if (recvd <= 0)
+            break;
+         buf[recvd] = '\0';
+         if (netplay_ggpo_rendezvous_parse_peer(buf, peer_address,
+               peer_address_size, peer_port))
+         {
+            socket_close(fd);
+            freeaddrinfo_retro(addr);
+            return true;
+         }
+      }
+   }
+
+   RARCH_ERR("[Netplay] GGPO rendezvous timed out waiting for peer.\n");
+
+   socket_close(fd);
+   freeaddrinfo_retro(addr);
+   return false;
+}
+
+static bool netplay_ggpo_rendezvous_start(netplay_t *netplay, uint16_t port)
+{
+   settings_t *settings = config_get_ptr();
+   const char *server = settings->paths.netplay_rendezvous_server;
+   const char *room = settings->paths.netplay_rendezvous_room;
+   uint16_t server_port = (uint16_t)settings->uints.netplay_rendezvous_port;
+   uint16_t local_port = port;
+
+   if (!netplay || !netplay_ggpo_rendezvous_enabled())
+      return false;
+
+   if (string_is_empty(server) || string_is_empty(room))
+   {
+      RARCH_ERR("[Netplay] GGPO rendezvous requires server and room settings.\n");
+      return false;
+   }
+
+   if (!server_port)
+      server_port = DEFAULT_NETPLAY_RENDEZVOUS_PORT;
+
+   if (!netplay->is_server)
+      local_port = (uint16_t)(port + 1);
+
+   if (!netplay_ggpo_rendezvous_open_socket(local_port, server, server_port,
+         &netplay->ggpo_rendezvous_fd, &netplay->ggpo_rendezvous_addr))
+   {
+      RARCH_ERR("[Netplay] GGPO rendezvous failed to open socket.\n");
+      netplay_ggpo_rendezvous_close(netplay);
+      return false;
+   }
+
+   netplay->ggpo_peer_port = 0;
+   netplay->ggpo_peer_address[0] = '\0';
+   netplay->ggpo_rendezvous_next_send = 0;
+   netplay->ggpo_rendezvous_active = true;
+
+   return true;
+}
+
+static bool netplay_ggpo_rendezvous_poll(netplay_t *netplay)
+{
+   settings_t *settings = config_get_ptr();
+   const char *room = settings->paths.netplay_rendezvous_room;
+   retro_time_t now;
+
+   if (!netplay || !netplay->ggpo_rendezvous_active)
+      return false;
+   if (netplay->ggpo_rendezvous_fd < 0 || !netplay->ggpo_rendezvous_addr)
+      return false;
+   if (string_is_empty(room))
+      return false;
+
+   now = cpu_features_get_time_usec();
+
+   if (now >= netplay->ggpo_rendezvous_next_send)
+   {
+      netplay_ggpo_rendezvous_send(netplay->ggpo_rendezvous_fd,
+            netplay->ggpo_rendezvous_addr, netplay->is_server, room);
+      netplay->ggpo_rendezvous_next_send = now + GGPO_RENDEZVOUS_RETRY_USEC;
+   }
+
+   for (;;)
+   {
+      char buf[GGPO_RENDEZVOUS_MAX_MSG];
+      struct sockaddr_storage from = {0};
+      socklen_t from_len = sizeof(from);
+      ssize_t recvd = recvfrom(netplay->ggpo_rendezvous_fd,
+            buf, sizeof(buf) - 1, 0,
+            (struct sockaddr*)&from, &from_len);
+
+      if (recvd <= 0)
+         break;
+
+      buf[recvd] = '\0';
+      if (netplay_ggpo_rendezvous_parse_peer(buf, netplay->ggpo_peer_address,
+            sizeof(netplay->ggpo_peer_address), &netplay->ggpo_peer_port))
+      {
+         netplay_ggpo_rendezvous_close(netplay);
+         return true;
+      }
+   }
+
+   return false;
+}
+
+static void netplay_ggpo_rendezvous_close(netplay_t *netplay)
+{
+   if (!netplay)
+      return;
+
+   if (netplay->ggpo_rendezvous_fd >= 0)
+   {
+      socket_close(netplay->ggpo_rendezvous_fd);
+      netplay->ggpo_rendezvous_fd = -1;
+   }
+
+   if (netplay->ggpo_rendezvous_addr)
+   {
+      freeaddrinfo_retro(netplay->ggpo_rendezvous_addr);
+      netplay->ggpo_rendezvous_addr = NULL;
+   }
+
+   netplay->ggpo_rendezvous_active = false;
+   netplay->ggpo_rendezvous_next_send = 0;
+}
+
+static bool netplay_ggpo_relay_send(int fd, struct addrinfo *addr,
+      bool is_server, const char *session)
+{
+   char msg[GGPO_RELAY_MAX_MSG];
+   int slot = is_server ? 1 : 2;
+   int msg_len;
+
+   if (!addr || string_is_empty(session))
+      return false;
+
+   msg_len = snprintf(msg, sizeof(msg), "%s HELLO %s %d",
+         GGPO_RELAY_MAGIC, session, slot);
+   if (msg_len <= 0 || msg_len >= (int)sizeof(msg))
+      return false;
+
+   return sendto(fd, msg, msg_len, 0, addr->ai_addr, addr->ai_addrlen) == msg_len;
+}
+
+static bool netplay_ggpo_relay_open_socket(uint16_t local_port,
+      const char *server, uint16_t server_port, int *out_fd,
+      struct addrinfo **out_addr)
+{
+   struct addrinfo *bind_addr = NULL;
+   struct addrinfo hints = {0};
+   char port_buf[6];
+   int fd = -1;
+
+   if (string_is_empty(server) || !out_fd || !out_addr)
+      return false;
+
+   fd = socket_init((void**)&bind_addr, local_port, NULL,
+         SOCKET_TYPE_DATAGRAM, AF_INET);
+   if (fd < 0 || !bind_addr)
+      goto error;
+
+   if (!socket_bind(fd, bind_addr))
+      goto error;
+
+   freeaddrinfo_retro(bind_addr);
+   bind_addr = NULL;
+
+   if (!socket_nonblock(fd))
+      goto error;
+
+   snprintf(port_buf, sizeof(port_buf), "%hu", (unsigned short)server_port);
+   hints.ai_family = AF_INET;
+   hints.ai_socktype = SOCK_DGRAM;
+   hints.ai_flags |= AI_NUMERICSERV;
+
+   if (getaddrinfo_retro(server, port_buf, &hints, out_addr) || !*out_addr)
+      goto error;
+
+   *out_fd = fd;
+   return true;
+
+error:
+   if (bind_addr)
+      freeaddrinfo_retro(bind_addr);
+   if (fd >= 0)
+      socket_close(fd);
+   return false;
+}
+
+static bool netplay_ggpo_relay_start(netplay_t *netplay, uint16_t port)
+{
+   settings_t *settings = config_get_ptr();
+   const char *server = settings->paths.netplay_ggpo_relay_server;
+   const char *session = settings->paths.netplay_ggpo_relay_session;
+   uint16_t server_port = (uint16_t)settings->uints.netplay_ggpo_relay_port;
+   uint16_t local_port = port;
+
+   if (!netplay || !netplay_ggpo_relay_enabled())
+      return false;
+
+   if (string_is_empty(server) || string_is_empty(session))
+   {
+      RARCH_ERR("[Netplay] GGPO relay requires server and session settings.\n");
+      return false;
+   }
+
+   if (!server_port)
+      server_port = DEFAULT_NETPLAY_GGPO_RELAY_PORT;
+
+   if (!netplay->is_server)
+      local_port = (uint16_t)(port + 1);
+
+   if (!netplay_ggpo_relay_open_socket(local_port, server, server_port,
+         &netplay->ggpo_relay_fd, &netplay->ggpo_relay_addr))
+   {
+      RARCH_ERR("[Netplay] GGPO relay failed to open socket.\n");
+      netplay_ggpo_relay_close(netplay);
+      return false;
+   }
+
+   strlcpy(netplay->ggpo_peer_address, server,
+         sizeof(netplay->ggpo_peer_address));
+   strlcpy(netplay->ggpo_relay_session, session,
+         sizeof(netplay->ggpo_relay_session));
+   netplay->ggpo_peer_port = server_port;
+   netplay->ggpo_relay_next_send = 0;
+   netplay->ggpo_relay_active = true;
+
+   return true;
+}
+
+static bool netplay_ggpo_relay_poll(netplay_t *netplay)
+{
+   const char *session = NULL;
+   retro_time_t now;
+
+   if (!netplay || !netplay->ggpo_relay_active)
+      return false;
+   if (netplay->ggpo_relay_fd < 0 || !netplay->ggpo_relay_addr)
+      return false;
+
+   session = netplay->ggpo_relay_session;
+   if (string_is_empty(session))
+      return false;
+
+   now = cpu_features_get_time_usec();
+
+   if (now >= netplay->ggpo_relay_next_send)
+   {
+      netplay_ggpo_relay_send(netplay->ggpo_relay_fd,
+            netplay->ggpo_relay_addr, netplay->is_server, session);
+      netplay->ggpo_relay_next_send = now + GGPO_RELAY_RETRY_USEC;
+   }
+
+   for (;;)
+   {
+      char buf[GGPO_RELAY_MAX_MSG];
+      char magic[16] = {0};
+      char status[16] = {0};
+      char session_buf[NETPLAY_HOST_STR_LEN] = {0};
+      struct sockaddr_storage from = {0};
+      socklen_t from_len = sizeof(from);
+      ssize_t recvd = recvfrom(netplay->ggpo_relay_fd,
+            buf, sizeof(buf) - 1, 0,
+            (struct sockaddr*)&from, &from_len);
+
+      if (recvd <= 0)
+         break;
+
+      buf[recvd] = '\0';
+      if (sscanf(buf, "%15s %15s %63s", magic, status, session_buf) < 2)
+         continue;
+      if (!string_is_equal(magic, GGPO_RELAY_MAGIC))
+         continue;
+      if (!string_is_empty(session_buf) &&
+            !string_is_equal(session_buf, session))
+         continue;
+
+      if (string_is_equal(status, "READY"))
+      {
+         netplay_ggpo_relay_close(netplay);
+         return true;
+      }
+      if (string_is_equal(status, "WAIT"))
+         continue;
+      if (string_is_equal(status, "FULL") ||
+            string_is_equal(status, "BUSY") ||
+            string_is_equal(status, "ERR"))
+      {
+         RARCH_ERR("[Netplay] GGPO relay error: %s\n", buf);
+         netplay_ggpo_relay_close(netplay);
+         netplay_disconnect(netplay);
+         return false;
+      }
+   }
+
+   return false;
+}
+
+static void netplay_ggpo_relay_close(netplay_t *netplay)
+{
+   if (!netplay)
+      return;
+
+   if (netplay->ggpo_relay_fd >= 0)
+   {
+      socket_close(netplay->ggpo_relay_fd);
+      netplay->ggpo_relay_fd = -1;
+   }
+
+   if (netplay->ggpo_relay_addr)
+   {
+      freeaddrinfo_retro(netplay->ggpo_relay_addr);
+      netplay->ggpo_relay_addr = NULL;
+   }
+
+   netplay->ggpo_relay_active = false;
+   netplay->ggpo_relay_next_send = 0;
 }
 #endif
 
@@ -7718,6 +8211,9 @@ static bool netplay_ggpo_init_session(netplay_t *netplay,
    unsigned local_device_port = netplay->is_server ? 0 : 1;
    unsigned remote_device_port = netplay->is_server ? 1 : 0;
 
+   if (!string_is_empty(netplay->ggpo_peer_address))
+      peer_address = netplay->ggpo_peer_address;
+
    if (string_is_empty(peer_address))
       peer_address = settings->paths.netplay_server;
 
@@ -7736,15 +8232,16 @@ static bool netplay_ggpo_init_session(netplay_t *netplay,
    netplay->ggpo_base_port = port;
 
    if (netplay->is_server)
-   {
       local_port = port;
-      remote_port = (uint16_t)(port + 1);
-   }
    else
-   {
       local_port = (uint16_t)(port + 1);
+
+   if (netplay->ggpo_peer_port)
+      remote_port = netplay->ggpo_peer_port;
+   else if (netplay->is_server)
+      remote_port = (uint16_t)(port + 1);
+   else
       remote_port = port;
-   }
 
    if (!network_init())
    {
@@ -7866,6 +8363,9 @@ static void netplay_free(netplay_t *netplay)
    size_t i;
 
 #ifdef HAVE_GGPO
+   netplay_ggpo_rendezvous_close(netplay);
+   netplay_ggpo_relay_close(netplay);
+
    if (netplay->ggpo)
    {
       ggpo_close_session(netplay->ggpo);
@@ -7958,7 +8458,7 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
       uint16_t port, const char *mitm_session,
       uint32_t check_frames, const struct retro_callbacks *cb,
       bool nat_traversal, const char *nick, uint32_t quirks,
-      enum netplay_modus modus)
+      enum netplay_modus modus, uint16_t ggpo_peer_port)
 {
    netplay_t *netplay        = (netplay_t*)calloc(1, sizeof(*netplay));
 
@@ -7975,6 +8475,10 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
    netplay->next_announce    = -1;
    netplay->next_ping        = -1;
    netplay->simple_rand_next = 1;
+#ifdef HAVE_GGPO
+   netplay->ggpo_rendezvous_fd = -1;
+   netplay->ggpo_relay_fd = -1;
+#endif
 
    strlcpy(netplay->nick,
       !string_is_empty(nick) ? nick : RARCH_DEFAULT_NICK,
@@ -8089,10 +8593,25 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
 
    if (netplay->modus == NETPLAY_MODUS_GGPO)
    {
+      netplay->ggpo_base_port = port;
+      netplay->ggpo_peer_port = ggpo_peer_port;
+
       if (!init_tcp_socket(netplay, server, mitm, port))
          goto failure;
       if (!netplay_init_buffers(netplay))
          goto failure;
+      if (netplay_ggpo_relay_enabled())
+      {
+         if (!netplay_ggpo_relay_start(netplay, port))
+            goto failure;
+         return netplay;
+      }
+      if (netplay->is_server && netplay_ggpo_rendezvous_enabled())
+      {
+         if (!netplay_ggpo_rendezvous_start(netplay, port))
+            goto failure;
+         return netplay;
+      }
       if (!netplay_ggpo_init_session(netplay, server, port))
          goto failure;
       return netplay;
@@ -9240,6 +9759,34 @@ static void netplay_announce_cb(retro_task_t *task, void *task_data,
                host_room->port = (int)strtol(value, NULL, 10);
             else if (string_is_equal(key, "host_method"))
                host_room->host_method = (int)strtol(value, NULL, 10);
+            else if (string_is_equal(key, "ggpo"))
+               host_room->ggpo =
+                     string_is_equal_case_insensitive(value, "true")
+                  || string_is_equal(value, "1");
+            else if (string_is_equal(key, "rendezvous"))
+               host_room->use_rendezvous =
+                     string_is_equal_case_insensitive(value, "true")
+                  || string_is_equal(value, "1");
+            else if (string_is_equal(key, "rendezvous_server"))
+               strlcpy(host_room->rendezvous_server, value,
+                  sizeof(host_room->rendezvous_server));
+            else if (string_is_equal(key, "rendezvous_room"))
+               strlcpy(host_room->rendezvous_room, value,
+                  sizeof(host_room->rendezvous_room));
+            else if (string_is_equal(key, "rendezvous_port"))
+               host_room->rendezvous_port = (int)strtol(value, NULL, 10);
+            else if (string_is_equal(key, "ggpo_relay"))
+               host_room->use_ggpo_relay =
+                     string_is_equal_case_insensitive(value, "true")
+                  || string_is_equal(value, "1");
+            else if (string_is_equal(key, "ggpo_relay_server"))
+               strlcpy(host_room->ggpo_relay_server, value,
+                  sizeof(host_room->ggpo_relay_server));
+            else if (string_is_equal(key, "ggpo_relay_session"))
+               strlcpy(host_room->ggpo_relay_session, value,
+                  sizeof(host_room->ggpo_relay_session));
+            else if (string_is_equal(key, "ggpo_relay_port"))
+               host_room->ggpo_relay_port = (int)strtol(value, NULL, 10);
             else if (string_is_equal(key, "has_password"))
                host_room->has_password =
                      string_is_equal_case_insensitive(value, "true")
@@ -9304,8 +9851,17 @@ static void netplay_announce(netplay_t *netplay)
    char *frontend_ident             = NULL;
    char *mitm_session               = NULL;
    char *mitm_custom_addr           = NULL;
+   char *rendezvous_server          = NULL;
+   char *rendezvous_room            = NULL;
+   char *ggpo_relay_server          = NULL;
+   char *ggpo_relay_session         = NULL;
    int mitm_custom_port             = 0;
    int is_mitm                      = 0;
+   int is_ggpo                      = 0;
+   int use_rendezvous               = 0;
+   int rendezvous_port              = 0;
+   int use_ggpo_relay               = 0;
+   int ggpo_relay_port              = 0;
    uint32_t content_crc             = 0;
    unsigned players                 = 0;
    unsigned spectators              = 0;
@@ -9387,6 +9943,43 @@ static void netplay_announce(netplay_t *netplay)
    else
       net_http_urlencode(&mitm_custom_addr, "");
 
+   is_ggpo = (netplay->modus == NETPLAY_MODUS_GGPO) ? 1 : 0;
+   use_ggpo_relay = is_ggpo && settings->bools.netplay_use_ggpo_relay;
+   use_rendezvous = is_ggpo && settings->bools.netplay_use_rendezvous
+      && !use_ggpo_relay;
+
+   if (use_rendezvous)
+   {
+      rendezvous_port = (int)settings->uints.netplay_rendezvous_port;
+      if (!rendezvous_port)
+         rendezvous_port = DEFAULT_NETPLAY_RENDEZVOUS_PORT;
+      net_http_urlencode(&rendezvous_server,
+            settings->paths.netplay_rendezvous_server);
+      net_http_urlencode(&rendezvous_room,
+            settings->paths.netplay_rendezvous_room);
+   }
+   else
+   {
+      net_http_urlencode(&rendezvous_server, "");
+      net_http_urlencode(&rendezvous_room, "");
+   }
+
+   if (use_ggpo_relay)
+   {
+      ggpo_relay_port = (int)settings->uints.netplay_ggpo_relay_port;
+      if (!ggpo_relay_port)
+         ggpo_relay_port = DEFAULT_NETPLAY_GGPO_RELAY_PORT;
+      net_http_urlencode(&ggpo_relay_server,
+            settings->paths.netplay_ggpo_relay_server);
+      net_http_urlencode(&ggpo_relay_session,
+            settings->paths.netplay_ggpo_relay_session);
+   }
+   else
+   {
+      net_http_urlencode(&ggpo_relay_server, "");
+      net_http_urlencode(&ggpo_relay_session, "");
+   }
+
    /* Purely informational, should not be used to guess if a host is full. */
    retrieve_client_count(netplay, &players, &spectators);
 
@@ -9414,6 +10007,15 @@ static void netplay_announce(netplay_t *netplay)
       "mitm_session=%s&"
       "mitm_custom_addr=%s&"
       "mitm_custom_port=%d&"
+      "ggpo=%d&"
+      "rendezvous=%d&"
+      "rendezvous_server=%s&"
+      "rendezvous_room=%s&"
+      "rendezvous_port=%d&"
+      "ggpo_relay=%d&"
+      "ggpo_relay_server=%s&"
+      "ggpo_relay_session=%s&"
+      "ggpo_relay_port=%d&"
       "player_count=%d&"
       "spectator_count=%d",
       username,
@@ -9432,6 +10034,15 @@ static void netplay_announce(netplay_t *netplay)
       mitm_session,
       mitm_custom_addr,
       mitm_custom_port,
+      is_ggpo,
+      use_rendezvous,
+      rendezvous_server,
+      rendezvous_room,
+      rendezvous_port,
+      use_ggpo_relay,
+      ggpo_relay_server,
+      ggpo_relay_session,
+      ggpo_relay_port,
       players,
       spectators);
 
@@ -9451,6 +10062,10 @@ static void netplay_announce(netplay_t *netplay)
    free(frontend_ident);
    free(mitm_session);
    free(mitm_custom_addr);
+   free(rendezvous_server);
+   free(rendezvous_room);
+   free(ggpo_relay_server);
+   free(ggpo_relay_session);
 }
 
 static void netplay_mitm_query_cb(retro_task_t *task, void *task_data,
@@ -9703,10 +10318,41 @@ static bool netplay_ggpo_pre_frame(netplay_t *netplay)
    GGPOErrorCode result;
    int disconnect_flags = 0;
 
-   if (!netplay || !netplay->ggpo)
+   if (!netplay)
       return true;
 
    netplay_ggpo_poll_control(netplay);
+
+   if (!netplay->ggpo)
+   {
+      if (netplay->ggpo_rendezvous_active)
+      {
+         if (netplay_ggpo_rendezvous_poll(netplay))
+         {
+            if (!netplay_ggpo_init_session(netplay,
+                  netplay->ggpo_peer_address, netplay->ggpo_base_port))
+            {
+               RARCH_ERR("[Netplay] GGPO failed to start after rendezvous.\n");
+               netplay_disconnect(netplay);
+            }
+         }
+         return false;
+      }
+      if (netplay->ggpo_relay_active)
+      {
+         if (netplay_ggpo_relay_poll(netplay))
+         {
+            if (!netplay_ggpo_init_session(netplay,
+                  netplay->ggpo_peer_address, netplay->ggpo_base_port))
+            {
+               RARCH_ERR("[Netplay] GGPO failed to start after relay.\n");
+               netplay_disconnect(netplay);
+            }
+         }
+         return false;
+      }
+      return true;
+   }
 
    if (netplay->ggpo_in_rollback)
       return true;
@@ -9963,6 +10609,12 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
    struct netplay_room *host_room = &net_st->host_room;
    const char *mitm               = NULL;
    enum netplay_modus modus       = NETPLAY_MODUS_INPUT_FRAME_SYNC;
+#ifdef HAVE_GGPO
+   char ggpo_peer_address[NETPLAY_HOST_LONGSTR_LEN] = {0};
+   uint16_t ggpo_peer_port = 0;
+   bool ggpo_use_rendezvous = false;
+   bool ggpo_use_relay = false;
+#endif
 
    if (!(net_st->flags & NET_DRIVER_ST_FLAG_NETPLAY_ENABLED))
       return false;
@@ -9980,9 +10632,21 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
       modus = NETPLAY_MODUS_GGPO;
 #endif
 
-   if ((!core_info_current_supports_netplay()
-         || serialization_quirks & (RETRO_SERIALIZATION_QUIRK_INCOMPLETE
-                                 | RETRO_SERIALIZATION_QUIRK_SINGLE_SESSION))
+#ifdef HAVE_GGPO
+   if (modus == NETPLAY_MODUS_GGPO)
+   {
+      ggpo_use_relay = settings->bools.netplay_use_ggpo_relay;
+      ggpo_use_rendezvous = settings->bools.netplay_use_rendezvous;
+      if (ggpo_use_relay && ggpo_use_rendezvous)
+      {
+         RARCH_WARN("[Netplay] GGPO relay and rendezvous both enabled. Using relay.\n");
+         ggpo_use_rendezvous = false;
+      }
+   }
+#endif
+
+   if ((serialization_quirks & (RETRO_SERIALIZATION_QUIRK_INCOMPLETE
+                             | RETRO_SERIALIZATION_QUIRK_SINGLE_SESSION))
          && modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE)
    {
       const char *_msg = msg_hash_to_str(MSG_NETPLAY_UNSUPPORTED);
@@ -10044,6 +10708,41 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
       }
    }
 
+#ifdef HAVE_GGPO
+   if (modus == NETPLAY_MODUS_GGPO &&
+         ggpo_use_rendezvous &&
+         (net_st->flags & NET_DRIVER_ST_FLAG_NETPLAY_IS_CLIENT))
+   {
+      uint16_t base_port = (uint16_t)(port ? port : RARCH_DEFAULT_PORT);
+
+      if (base_port == UINT16_MAX)
+      {
+         RARCH_ERR("[Netplay] GGPO port must be below 65535.\n");
+         goto failure;
+      }
+
+      if (!netplay_ggpo_rendezvous_resolve_peer(ggpo_peer_address,
+            sizeof(ggpo_peer_address), &ggpo_peer_port,
+            (uint16_t)(base_port + 1)))
+         goto failure;
+
+      server = ggpo_peer_address;
+      port = base_port;
+   }
+#endif
+
+#ifdef HAVE_GGPO
+   if (modus == NETPLAY_MODUS_GGPO && ggpo_use_relay)
+   {
+      uint16_t relay_port = (uint16_t)settings->uints.netplay_ggpo_relay_port;
+
+      if (!relay_port)
+         relay_port = DEFAULT_NETPLAY_GGPO_RELAY_PORT;
+
+      ggpo_peer_port = relay_port;
+   }
+#endif
+
    net_st->flags &= ~NET_DRIVER_ST_FLAG_NETPLAY_CLIENT_DEFERRED;
    netplay        = netplay_new(
       server, mitm, port, mitm_session,
@@ -10055,7 +10754,13 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
       :
 #endif
       settings->paths.username,
-      quirks, modus);
+      quirks, modus,
+#ifdef HAVE_GGPO
+      ggpo_peer_port
+#else
+      0
+#endif
+      );
    if (!netplay)
       goto failure;
 

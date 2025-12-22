@@ -73,7 +73,7 @@ RETRO_BEGIN_DECLS
 #define FILE_PATH_INDEX_EXTENDED_URL ".index-extended"
 #define FILE_PATH_NETPLAY_ROOM_LIST_URL "registry.lpl"
 #define FILE_PATH_RETROACHIEVEMENTS_URL "http://i.retroachievements.org"
-#define FILE_PATH_LOBBY_LIBRETRO_URL "http://lobby.libretro.com/"
+#define FILE_PATH_LOBBY_LIBRETRO_URL "http://lobby.retromp.net:25872/"
 #define FILE_PATH_CORE_THUMBNAILS_URL "http://thumbnails.libretro.com"
 #define FILE_PATH_CORE_THUMBNAILPACKS_URL "http://thumbnailpacks.libretro.com"
 #define FILE_PATH_SHADERS_GLSL_ZIP "shaders_glsl.zip"

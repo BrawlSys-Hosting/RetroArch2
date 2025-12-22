@@ -1309,8 +1309,16 @@ DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_video_vp_bias_portrait_x,        MEN
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_video_vp_bias_portrait_y,        MENU_ENUM_SUBLABEL_VIDEO_VIEWPORT_BIAS_PORTRAIT_Y)
 #endif
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_use_mitm_server,               MENU_ENUM_SUBLABEL_NETPLAY_USE_MITM_SERVER)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_use_rendezvous,                MENU_ENUM_SUBLABEL_NETPLAY_USE_RENDEZVOUS)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_use_ggpo_relay,                MENU_ENUM_SUBLABEL_NETPLAY_USE_GGPO_RELAY)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_mitm_server,                   MENU_ENUM_SUBLABEL_NETPLAY_MITM_SERVER)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_custom_mitm_server,            MENU_ENUM_SUBLABEL_NETPLAY_CUSTOM_MITM_SERVER)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_rendezvous_server,             MENU_ENUM_SUBLABEL_NETPLAY_RENDEZVOUS_SERVER)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_rendezvous_port,               MENU_ENUM_SUBLABEL_NETPLAY_RENDEZVOUS_PORT)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_rendezvous_room,               MENU_ENUM_SUBLABEL_NETPLAY_RENDEZVOUS_ROOM)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_relay_server,             MENU_ENUM_SUBLABEL_NETPLAY_GGPO_RELAY_SERVER)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_relay_port,               MENU_ENUM_SUBLABEL_NETPLAY_GGPO_RELAY_PORT)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_relay_session,            MENU_ENUM_SUBLABEL_NETPLAY_GGPO_RELAY_SESSION)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_core_lock,                             MENU_ENUM_SUBLABEL_CORE_LOCK)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_core_set_standalone_exempt,            MENU_ENUM_SUBLABEL_CORE_SET_STANDALONE_EXEMPT)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_core_delete,                           MENU_ENUM_SUBLABEL_CORE_DELETE)
@@ -5555,11 +5563,35 @@ int menu_cbs_init_bind_sublabel(menu_file_list_cbs_t *cbs,
          case MENU_ENUM_LABEL_NETPLAY_USE_MITM_SERVER:
             BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_use_mitm_server);
             break;
+         case MENU_ENUM_LABEL_NETPLAY_USE_RENDEZVOUS:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_use_rendezvous);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_USE_GGPO_RELAY:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_use_ggpo_relay);
+            break;
          case MENU_ENUM_LABEL_NETPLAY_MITM_SERVER:
             BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_mitm_server);
             break;
          case MENU_ENUM_LABEL_NETPLAY_CUSTOM_MITM_SERVER:
             BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_custom_mitm_server);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_SERVER:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_rendezvous_server);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_PORT:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_rendezvous_port);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_ROOM:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_rendezvous_room);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_SERVER:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_ggpo_relay_server);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_PORT:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_ggpo_relay_port);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_SESSION:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_ggpo_relay_session);
             break;
          case MENU_ENUM_LABEL_CORE_LOCK:
             BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_core_lock);

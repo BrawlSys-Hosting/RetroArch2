@@ -74,6 +74,8 @@ struct netplay_room
    int  host_method;
    int  player_count;
    int  spectator_count;
+   int  rendezvous_port;
+   int  ggpo_relay_port;
    char nickname[NETPLAY_NICK_LEN];
    char frontend[NETPLAY_HOST_STR_LEN];
    char corename[NETPLAY_HOST_STR_LEN];
@@ -86,11 +88,18 @@ struct netplay_room
    char mitm_handle[NETPLAY_HOST_STR_LEN];
    char mitm_address[NETPLAY_HOST_LONGSTR_LEN];
    char mitm_session[NETPLAY_HOST_STR_LEN];
+   char rendezvous_server[NETPLAY_HOST_LONGSTR_LEN];
+   char rendezvous_room[NETPLAY_HOST_STR_LEN];
+   char ggpo_relay_server[NETPLAY_HOST_LONGSTR_LEN];
+   char ggpo_relay_session[NETPLAY_HOST_STR_LEN];
    bool has_password;
    bool has_spectate_password;
    bool connectable;
    bool is_retroarch;
    bool lan;
+   bool ggpo;
+   bool use_rendezvous;
+   bool use_ggpo_relay;
 };
 
 struct netplay_rooms

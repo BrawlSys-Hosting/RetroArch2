@@ -197,8 +197,42 @@ static bool netplay_json_object_member(void *ctx, const char *p_value,
             p_ctx->cur_member_string = net_st->rooms_data->cur->mitm_session;
             p_ctx->cur_member_size   = sizeof(net_st->rooms_data->cur->mitm_session);
          }
+         else if (string_is_equal(p_value, "rendezvous_server"))
+         {
+            p_ctx->cur_member_string = net_st->rooms_data->cur->rendezvous_server;
+            p_ctx->cur_member_size   = sizeof(net_st->rooms_data->cur->rendezvous_server);
+         }
+         else if (string_is_equal(p_value, "rendezvous_room"))
+         {
+            p_ctx->cur_member_string = net_st->rooms_data->cur->rendezvous_room;
+            p_ctx->cur_member_size   = sizeof(net_st->rooms_data->cur->rendezvous_room);
+         }
+         else if (string_is_equal(p_value, "rendezvous_port"))
+            p_ctx->cur_member_int    = &net_st->rooms_data->cur->rendezvous_port;
+         else if (string_is_equal(p_value, "ggpo_relay_server"))
+         {
+            p_ctx->cur_member_string = net_st->rooms_data->cur->ggpo_relay_server;
+            p_ctx->cur_member_size   = sizeof(net_st->rooms_data->cur->ggpo_relay_server);
+         }
+         else if (string_is_equal(p_value, "ggpo_relay_session"))
+         {
+            p_ctx->cur_member_string = net_st->rooms_data->cur->ggpo_relay_session;
+            p_ctx->cur_member_size   = sizeof(net_st->rooms_data->cur->ggpo_relay_session);
+         }
+         else if (string_is_equal(p_value, "ggpo_relay_port"))
+            p_ctx->cur_member_int    = &net_st->rooms_data->cur->ggpo_relay_port;
          else if (string_is_equal(p_value, "host_method"))
             p_ctx->cur_member_int    = &net_st->rooms_data->cur->host_method;
+         else if (string_is_equal(p_value, "ggpo"))
+            p_ctx->cur_member_bool   = &net_st->rooms_data->cur->ggpo;
+         else if (string_is_equal(p_value, "use_rendezvous"))
+            p_ctx->cur_member_bool   = &net_st->rooms_data->cur->use_rendezvous;
+         else if (string_is_equal(p_value, "rendezvous"))
+            p_ctx->cur_member_bool   = &net_st->rooms_data->cur->use_rendezvous;
+         else if (string_is_equal(p_value, "use_ggpo_relay"))
+            p_ctx->cur_member_bool   = &net_st->rooms_data->cur->use_ggpo_relay;
+         else if (string_is_equal(p_value, "ggpo_relay"))
+            p_ctx->cur_member_bool   = &net_st->rooms_data->cur->use_ggpo_relay;
          else if (string_is_equal(p_value, "retroarch_version"))
          {
             p_ctx->cur_member_string = net_st->rooms_data->cur->retroarch_version;

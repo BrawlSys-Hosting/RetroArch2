@@ -448,3 +448,18 @@ hosts still open the TCP control port for lobby announcements. Chat relay and
 lobby announcements are supported via a parallel TCP control channel for direct
 sessions.
 Spectator mode and MITM/relay features are not available in GGPO mode.
+
+Rendezvous server support is available for GGPO. When enabled
+(netplay_use_rendezvous), RetroArch registers a room name with a UDP rendezvous
+server (matchmaking-server/rendezvous_server.c) and exchanges the peer's public
+IP and UDP port. The host waits for a client; the client resolves the peer
+before connecting. Set netplay_rendezvous_server, netplay_rendezvous_port and
+netplay_rendezvous_room. This does not relay traffic; it only performs address
+exchange and relies on UDP hole punching. The TCP control channel (chat/lobby)
+still uses netplay_port and should be reachable (UPnP recommended).
+
+GGPO relay server support is available for UDP traffic. When enabled
+(netplay_use_ggpo_relay), RetroArch registers a session with a relay server and
+directs GGPO packets to it. Set netplay_ggpo_relay_server,
+netplay_ggpo_relay_port and netplay_ggpo_relay_session. The TCP control
+channel still connects directly to the peer address.

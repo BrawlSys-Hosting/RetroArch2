@@ -7644,6 +7644,22 @@ MSG_HASH(
    "Forward netplay connections through a man-in-the-middle server. Useful if the host is behind a firewall or has NAT/UPnP problems."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_USE_RENDEZVOUS,
+   "Use GGPO Rendezvous Server"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_USE_RENDEZVOUS,
+   "Use a rendezvous server to exchange peer addresses for GGPO netplay."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_USE_GGPO_RELAY,
+   "Use GGPO Relay Server"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_USE_GGPO_RELAY,
+   "Forward GGPO UDP traffic through a relay server. The TCP control channel still connects directly to the peer."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_NETPLAY_MITM_SERVER,
    "Relay Server Location"
    )
@@ -7658,6 +7674,54 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_SUBLABEL_NETPLAY_CUSTOM_MITM_SERVER,
    "Input the address of your custom relay server here. Format: address or address|port."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_RENDEZVOUS_SERVER,
+   "Rendezvous Server Address"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_RENDEZVOUS_SERVER,
+   "Address of the GGPO rendezvous server used for peer discovery."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_RENDEZVOUS_PORT,
+   "Rendezvous Server Port"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_RENDEZVOUS_PORT,
+   "UDP port of the GGPO rendezvous server."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_RENDEZVOUS_ROOM,
+   "Rendezvous Room"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_RENDEZVOUS_ROOM,
+   "Room name used by the rendezvous server to match peers."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_RELAY_SERVER,
+   "GGPO Relay Server Address"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_GGPO_RELAY_SERVER,
+   "Address of the GGPO relay server used for UDP forwarding."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_RELAY_PORT,
+   "GGPO Relay Server Port"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_GGPO_RELAY_PORT,
+   "UDP port of the GGPO relay server."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_RELAY_SESSION,
+   "GGPO Relay Session"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_GGPO_RELAY_SESSION,
+   "Session id used by the relay to pair two clients."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_NETPLAY_MITM_SERVER_LOCATION_1,

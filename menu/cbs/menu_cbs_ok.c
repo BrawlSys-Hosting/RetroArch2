@@ -6739,12 +6739,64 @@ static int action_ok_netplay_connect_room(const char *path, const char *label,
    char hostname[512];
    struct netplay_room *room;
    net_driver_state_t *net_st = networking_state_get_ptr();
+   settings_t *settings = config_get_ptr();
    unsigned room_index        = type - MENU_SETTINGS_NETPLAY_ROOMS_START;
 
    if (room_index >= (unsigned)net_st->room_count)
       return -1;
 
    room = &net_st->room_list[room_index];
+
+   if (room->ggpo)
+   {
+      settings->bools.netplay_use_ggpo = true;
+
+      if (room->use_rendezvous ||
+            !string_is_empty(room->rendezvous_room))
+      {
+         settings->bools.netplay_use_rendezvous = true;
+         if (!string_is_empty(room->rendezvous_server))
+            strlcpy(settings->paths.netplay_rendezvous_server,
+               room->rendezvous_server,
+               sizeof(settings->paths.netplay_rendezvous_server));
+         if (!string_is_empty(room->rendezvous_room))
+            strlcpy(settings->paths.netplay_rendezvous_room,
+               room->rendezvous_room,
+               sizeof(settings->paths.netplay_rendezvous_room));
+         if (room->rendezvous_port > 0 && room->rendezvous_port <= 65535)
+            settings->uints.netplay_rendezvous_port =
+               (unsigned)room->rendezvous_port;
+      }
+      else
+         settings->bools.netplay_use_rendezvous = false;
+
+      if (room->use_ggpo_relay ||
+            !string_is_empty(room->ggpo_relay_session) ||
+            !string_is_empty(room->ggpo_relay_server))
+      {
+         settings->bools.netplay_use_ggpo_relay = true;
+         settings->bools.netplay_use_rendezvous = false;
+         if (!string_is_empty(room->ggpo_relay_server))
+            strlcpy(settings->paths.netplay_ggpo_relay_server,
+               room->ggpo_relay_server,
+               sizeof(settings->paths.netplay_ggpo_relay_server));
+         if (!string_is_empty(room->ggpo_relay_session))
+            strlcpy(settings->paths.netplay_ggpo_relay_session,
+               room->ggpo_relay_session,
+               sizeof(settings->paths.netplay_ggpo_relay_session));
+         if (room->ggpo_relay_port > 0 && room->ggpo_relay_port <= 65535)
+            settings->uints.netplay_ggpo_relay_port =
+               (unsigned)room->ggpo_relay_port;
+      }
+      else
+         settings->bools.netplay_use_ggpo_relay = false;
+   }
+   else
+   {
+      settings->bools.netplay_use_ggpo = false;
+      settings->bools.netplay_use_rendezvous = false;
+      settings->bools.netplay_use_ggpo_relay = false;
+   }
 
    if (room->host_method == NETPLAY_HOST_METHOD_MITM)
       snprintf(hostname, sizeof(hostname), "%s|%d|%s",

@@ -9169,16 +9169,26 @@ unsigned menu_displaylist_build_list(
       case DISPLAYLIST_NETWORK_SETTINGS_LIST:
          {
             unsigned user;
-            bool netplay_allow_slaves    = settings->bools.netplay_allow_slaves;
-            bool netplay_use_mitm_server = settings->bools.netplay_use_mitm_server;
+            bool netplay_allow_slaves      = settings->bools.netplay_allow_slaves;
+            bool netplay_use_mitm_server   = settings->bools.netplay_use_mitm_server;
+            bool netplay_use_rendezvous    = settings->bools.netplay_use_rendezvous;
+            bool netplay_use_ggpo_relay    = settings->bools.netplay_use_ggpo_relay;
             bool network_cmd_enable      = settings->bools.network_cmd_enable;
             bool network_remote_enable   = settings->bools.network_remote_enable;
 
             menu_displaylist_build_info_selective_t build_list[] = {
                {MENU_ENUM_LABEL_NETPLAY_PUBLIC_ANNOUNCE,            PARSE_ONLY_BOOL,   true},
                {MENU_ENUM_LABEL_NETPLAY_USE_MITM_SERVER,            PARSE_ONLY_BOOL,   true},
+               {MENU_ENUM_LABEL_NETPLAY_USE_RENDEZVOUS,             PARSE_ONLY_BOOL,   true},
+               {MENU_ENUM_LABEL_NETPLAY_USE_GGPO_RELAY,             PARSE_ONLY_BOOL,   true},
                {MENU_ENUM_LABEL_NETPLAY_MITM_SERVER,                PARSE_ONLY_STRING, false},
                {MENU_ENUM_LABEL_NETPLAY_CUSTOM_MITM_SERVER,         PARSE_ONLY_STRING, false},
+               {MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_SERVER,          PARSE_ONLY_STRING, false},
+               {MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_PORT,            PARSE_ONLY_UINT,   false},
+               {MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_ROOM,            PARSE_ONLY_STRING, false},
+               {MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_SERVER,          PARSE_ONLY_STRING, false},
+               {MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_PORT,            PARSE_ONLY_UINT,   false},
+               {MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_SESSION,         PARSE_ONLY_STRING, false},
                {MENU_ENUM_LABEL_NETPLAY_IP_ADDRESS,                 PARSE_ONLY_STRING, true},
                {MENU_ENUM_LABEL_NETPLAY_TCP_UDP_PORT,               PARSE_ONLY_UINT,   true},
                {MENU_ENUM_LABEL_NETPLAY_MAX_CONNECTIONS,            PARSE_ONLY_UINT,   true},
@@ -9211,6 +9221,18 @@ unsigned menu_displaylist_build_list(
                   case MENU_ENUM_LABEL_NETPLAY_MITM_SERVER:
                   case MENU_ENUM_LABEL_NETPLAY_CUSTOM_MITM_SERVER:
                      if (netplay_use_mitm_server)
+                        build_list[i].checked = true;
+                     break;
+                  case MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_SERVER:
+                  case MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_PORT:
+                  case MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_ROOM:
+                     if (netplay_use_rendezvous)
+                        build_list[i].checked = true;
+                     break;
+                  case MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_SERVER:
+                  case MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_PORT:
+                  case MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_SESSION:
+                     if (netplay_use_ggpo_relay)
                         build_list[i].checked = true;
                      break;
                   default:
@@ -12344,8 +12366,10 @@ bool menu_displaylist_ctl(enum menu_displaylist_ctl_state type,
             {
                size_t i;
                file_list_t *list            = info->list;
-               bool netplay_allow_slaves    = settings->bools.netplay_allow_slaves;
-               bool netplay_use_mitm_server = settings->bools.netplay_use_mitm_server;
+               bool netplay_allow_slaves      = settings->bools.netplay_allow_slaves;
+               bool netplay_use_mitm_server   = settings->bools.netplay_use_mitm_server;
+               bool netplay_use_rendezvous    = settings->bools.netplay_use_rendezvous;
+               bool netplay_use_ggpo_relay    = settings->bools.netplay_use_ggpo_relay;
 
                menu_displaylist_build_info_selective_t build_list[] = {
                   {MENU_ENUM_LABEL_NETPLAY_TCP_UDP_PORT,       PARSE_ONLY_UINT,   true},
@@ -12353,8 +12377,16 @@ bool menu_displaylist_ctl(enum menu_displaylist_ctl_state type,
                   {MENU_ENUM_LABEL_NETPLAY_MAX_PING,           PARSE_ONLY_UINT,   true},
                   {MENU_ENUM_LABEL_NETPLAY_PUBLIC_ANNOUNCE,    PARSE_ONLY_BOOL,   true},
                   {MENU_ENUM_LABEL_NETPLAY_USE_MITM_SERVER,    PARSE_ONLY_BOOL,   true},
+                  {MENU_ENUM_LABEL_NETPLAY_USE_RENDEZVOUS,     PARSE_ONLY_BOOL,   true},
+                  {MENU_ENUM_LABEL_NETPLAY_USE_GGPO_RELAY,     PARSE_ONLY_BOOL,   true},
                   {MENU_ENUM_LABEL_NETPLAY_MITM_SERVER,        PARSE_ONLY_STRING, false},
                   {MENU_ENUM_LABEL_NETPLAY_CUSTOM_MITM_SERVER, PARSE_ONLY_STRING, false},
+                  {MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_SERVER,  PARSE_ONLY_STRING, false},
+                  {MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_PORT,    PARSE_ONLY_UINT,   false},
+                  {MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_ROOM,    PARSE_ONLY_STRING, false},
+                  {MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_SERVER,  PARSE_ONLY_STRING, false},
+                  {MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_PORT,    PARSE_ONLY_UINT,   false},
+                  {MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_SESSION, PARSE_ONLY_STRING, false},
                   {MENU_ENUM_LABEL_NETPLAY_PASSWORD,           PARSE_ONLY_STRING, true},
                   {MENU_ENUM_LABEL_NETPLAY_SPECTATE_PASSWORD,  PARSE_ONLY_STRING, true},
                   {MENU_ENUM_LABEL_NETPLAY_ALLOW_PAUSING,      PARSE_ONLY_BOOL,   true},
@@ -12409,6 +12441,18 @@ bool menu_displaylist_ctl(enum menu_displaylist_ctl_state type,
                      case MENU_ENUM_LABEL_NETPLAY_MITM_SERVER:
                      case MENU_ENUM_LABEL_NETPLAY_CUSTOM_MITM_SERVER:
                         if (netplay_use_mitm_server)
+                           build_list[i].checked = true;
+                        break;
+                     case MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_SERVER:
+                     case MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_PORT:
+                     case MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_ROOM:
+                        if (netplay_use_rendezvous)
+                           build_list[i].checked = true;
+                        break;
+                     case MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_SERVER:
+                     case MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_PORT:
+                     case MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_SESSION:
+                        if (netplay_use_ggpo_relay)
                            build_list[i].checked = true;
                         break;
                      default:

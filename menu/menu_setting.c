@@ -23054,6 +23054,42 @@ static bool setting_append_list(
             (*list)[list_info->index - 1].action_left   = &setting_bool_action_left_with_refresh;
             (*list)[list_info->index - 1].action_right  = &setting_bool_action_right_with_refresh;
 
+            CONFIG_BOOL(
+                  list, list_info,
+                  &settings->bools.netplay_use_rendezvous,
+                  MENU_ENUM_LABEL_NETPLAY_USE_RENDEZVOUS,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_USE_RENDEZVOUS,
+                  DEFAULT_NETPLAY_USE_RENDEZVOUS,
+                  MENU_ENUM_LABEL_VALUE_OFF,
+                  MENU_ENUM_LABEL_VALUE_ON,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler,
+                  SD_FLAG_NONE);
+            (*list)[list_info->index - 1].action_ok     = &setting_bool_action_left_with_refresh;
+            (*list)[list_info->index - 1].action_left   = &setting_bool_action_left_with_refresh;
+            (*list)[list_info->index - 1].action_right  = &setting_bool_action_right_with_refresh;
+
+            CONFIG_BOOL(
+                  list, list_info,
+                  &settings->bools.netplay_use_ggpo_relay,
+                  MENU_ENUM_LABEL_NETPLAY_USE_GGPO_RELAY,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_USE_GGPO_RELAY,
+                  DEFAULT_NETPLAY_USE_GGPO_RELAY,
+                  MENU_ENUM_LABEL_VALUE_OFF,
+                  MENU_ENUM_LABEL_VALUE_ON,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler,
+                  SD_FLAG_NONE);
+            (*list)[list_info->index - 1].action_ok     = &setting_bool_action_left_with_refresh;
+            (*list)[list_info->index - 1].action_left   = &setting_bool_action_left_with_refresh;
+            (*list)[list_info->index - 1].action_right  = &setting_bool_action_right_with_refresh;
+
             CONFIG_STRING(
                   list, list_info,
                   settings->arrays.netplay_mitm_server,
@@ -23080,6 +23116,104 @@ static bool setting_append_list(
                   MENU_ENUM_LABEL_NETPLAY_CUSTOM_MITM_SERVER,
                   MENU_ENUM_LABEL_VALUE_NETPLAY_CUSTOM_MITM_SERVER,
                   "",
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ALLOW_INPUT);
+            (*list)[list_info->index - 1].ui_type       = ST_UI_TYPE_STRING_LINE_EDIT;
+            (*list)[list_info->index - 1].action_start  = setting_generic_action_start_default;
+
+            CONFIG_STRING(
+                  list, list_info,
+                  settings->paths.netplay_rendezvous_server,
+                  sizeof(settings->paths.netplay_rendezvous_server),
+                  MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_SERVER,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_RENDEZVOUS_SERVER,
+                  DEFAULT_NETPLAY_RENDEZVOUS_SERVER,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ALLOW_INPUT);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ADVANCED);
+            (*list)[list_info->index - 1].ui_type       = ST_UI_TYPE_STRING_LINE_EDIT;
+            (*list)[list_info->index - 1].action_start  = setting_generic_action_start_default;
+
+            CONFIG_UINT(
+                  list, list_info,
+                  &settings->uints.netplay_rendezvous_port,
+                  MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_PORT,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_RENDEZVOUS_PORT,
+                  DEFAULT_NETPLAY_RENDEZVOUS_PORT,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            (*list)[list_info->index - 1].action_ok = &setting_action_ok_uint;
+            menu_settings_list_current_add_range(list, list_info, 0, 65535, 1, true, true);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ALLOW_INPUT);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ADVANCED);
+
+            CONFIG_STRING(
+                  list, list_info,
+                  settings->paths.netplay_rendezvous_room,
+                  sizeof(settings->paths.netplay_rendezvous_room),
+                  MENU_ENUM_LABEL_NETPLAY_RENDEZVOUS_ROOM,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_RENDEZVOUS_ROOM,
+                  DEFAULT_NETPLAY_RENDEZVOUS_ROOM,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ALLOW_INPUT);
+            (*list)[list_info->index - 1].ui_type       = ST_UI_TYPE_STRING_LINE_EDIT;
+            (*list)[list_info->index - 1].action_start  = setting_generic_action_start_default;
+
+            CONFIG_STRING(
+                  list, list_info,
+                  settings->paths.netplay_ggpo_relay_server,
+                  sizeof(settings->paths.netplay_ggpo_relay_server),
+                  MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_SERVER,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_RELAY_SERVER,
+                  DEFAULT_NETPLAY_GGPO_RELAY_SERVER,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ALLOW_INPUT);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ADVANCED);
+            (*list)[list_info->index - 1].ui_type       = ST_UI_TYPE_STRING_LINE_EDIT;
+            (*list)[list_info->index - 1].action_start  = setting_generic_action_start_default;
+
+            CONFIG_UINT(
+                  list, list_info,
+                  &settings->uints.netplay_ggpo_relay_port,
+                  MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_PORT,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_RELAY_PORT,
+                  DEFAULT_NETPLAY_GGPO_RELAY_PORT,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            (*list)[list_info->index - 1].action_ok = &setting_action_ok_uint;
+            menu_settings_list_current_add_range(list, list_info, 0, 65535, 1, true, true);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ALLOW_INPUT);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ADVANCED);
+
+            CONFIG_STRING(
+                  list, list_info,
+                  settings->paths.netplay_ggpo_relay_session,
+                  sizeof(settings->paths.netplay_ggpo_relay_session),
+                  MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_SESSION,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_RELAY_SESSION,
+                  DEFAULT_NETPLAY_GGPO_RELAY_SESSION,
                   &group_info,
                   &subgroup_info,
                   parent_group,
