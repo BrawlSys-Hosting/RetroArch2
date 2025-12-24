@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import ipaddress
 import json
 import os
 import threading
@@ -40,6 +41,9 @@ HOST_METHOD_MITM = 3
 ROOM_TTL_SECONDS = int(os.getenv("LOBBY_ROOM_TTL", "180"))
 MAX_ROOMS = int(os.getenv("LOBBY_MAX_ROOMS", "512"))
 MITM_CONFIG_PATH = os.getenv("LOBBY_MITM_CONFIG", "mitm_servers.json")
+LOBBY_TRUST_PROXY = os.getenv("LOBBY_TRUST_PROXY", "")
+LOBBY_PUBLIC_IP = os.getenv("LOBBY_PUBLIC_IP", "")
+LOBBY_PUBLIC_RENDEZVOUS = os.getenv("LOBBY_PUBLIC_RENDEZVOUS", "")
 
 _rooms_by_id = {}
 _rooms_by_key = {}
@@ -135,7 +139,7 @@ def _extract_fields(params, client_ip):
     fields["ggpo_relay_session"] = params.get("ggpo_relay_session", "")
     fields["ggpo_relay_port"] = _coerce_int(params.get("ggpo_relay_port"), 0)
     fields["mitm_server"] = params.get("mitm_server", "")
-    fields["ip"] = client_ip
+    fields["ip"] = _maybe_override_ip(client_ip)
     fields["connectable"] = True
     fields["is_retroarch"] = True
 
@@ -158,6 +162,10 @@ def _extract_fields(params, client_ip):
     fields["mitm_session"] = params.get("mitm_session", "")
 
     fields["country"] = params.get("country", "")
+
+    fields["rendezvous_server"] = _normalize_rendezvous_server(
+        fields["rendezvous_server"]
+    )
 
     return fields
 
@@ -195,6 +203,60 @@ def _plain_response(fields, room_id):
     return "\n".join(lines) + "\n"
 
 
+def _is_private_or_loopback(value):
+    try:
+        addr = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_unspecified
+    )
+
+
+def _first_forwarded_ip(value):
+    if not value:
+        return ""
+    for entry in value.split(","):
+        ip = entry.strip()
+        if ip:
+            return ip
+    return ""
+
+
+def _resolve_client_ip(handler):
+    if _coerce_bool(LOBBY_TRUST_PROXY):
+        forwarded = _first_forwarded_ip(handler.headers.get("X-Forwarded-For", ""))
+        if forwarded:
+            return forwarded
+        real_ip = handler.headers.get("X-Real-IP", "").strip()
+        if real_ip:
+            return real_ip
+    return handler.client_address[0]
+
+
+def _maybe_override_ip(client_ip):
+    if LOBBY_PUBLIC_IP and _is_private_or_loopback(client_ip):
+        return LOBBY_PUBLIC_IP
+    return client_ip
+
+
+def _normalize_rendezvous_server(value):
+    if not value:
+        return LOBBY_PUBLIC_RENDEZVOUS or value
+
+    lower_value = value.strip().lower()
+    if lower_value in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        return LOBBY_PUBLIC_RENDEZVOUS or LOBBY_PUBLIC_IP or value
+
+    if _is_private_or_loopback(value):
+        return LOBBY_PUBLIC_RENDEZVOUS or LOBBY_PUBLIC_IP or value
+
+    return value
+
+
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
@@ -225,7 +287,7 @@ class LobbyHandler(BaseHTTPRequestHandler):
         params = urllib.parse.parse_qs(raw, keep_blank_values=True)
         flat = {k: v[0] if v else "" for k, v in params.items()}
 
-        client_ip = self.client_address[0]
+        client_ip = _resolve_client_ip(self)
         fields = _extract_fields(flat, client_ip)
 
         with _rooms_lock:

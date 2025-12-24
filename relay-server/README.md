@@ -66,3 +66,32 @@ RetroArch GGPO currently expects a direct peer address. To use this relay, the
 client must send the `HELLO` message first and then direct GGPO traffic to the
 relay server address/port. Client-side changes are required to automate this
 for the GGPO backend.
+
+## TCP Relay Server
+
+This is a TCP relay/proxy for the netplay control channel (handshake, nick,
+password exchange, chat, lobby announcements). It implements the existing
+MITM/tunnel protocol used by RetroArch so GGPO control traffic can run without
+port forwarding.
+
+Run:
+
+```sh
+python tcp_relay_server.py
+```
+
+Environment variables (loaded from `.env` if present):
+
+- `TCP_RELAY_BIND` (default `0.0.0.0`)
+- `TCP_RELAY_PORT` (default `7002`)
+- `TCP_RELAY_PENDING_TTL` (default `30` seconds)
+- `TCP_RELAY_MAX_SESSIONS` (default `512`)
+
+RetroArch integration:
+
+- Enable `netplay_use_mitm_server`.
+- Set `netplay_mitm_server` to `custom`.
+- Set `netplay_custom_mitm_server` to `<host>|<port>` (example: `relay.example.com|7002`).
+
+This only relays TCP control traffic. Use rendezvous or the UDP relay to handle
+GGPO gameplay traffic if direct UDP is not possible.

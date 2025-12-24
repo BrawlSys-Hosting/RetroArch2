@@ -463,3 +463,9 @@ GGPO relay server support is available for UDP traffic. When enabled
 directs GGPO packets to it. Set netplay_ggpo_relay_server,
 netplay_ggpo_relay_port and netplay_ggpo_relay_session. The TCP control
 channel still connects directly to the peer address.
+
+TCP relay (MITM/tunnel) server support is available for the GGPO control
+channel. When enabled (netplay_use_mitm_server), RetroArch routes the TCP
+handshake/chat/lobby traffic through the relay server (netplay_mitm_server or
+netplay_custom_mitm_server). This does not relay UDP gameplay traffic; use
+the rendezvous or UDP relay settings for that.

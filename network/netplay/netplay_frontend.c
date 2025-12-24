@@ -7645,6 +7645,15 @@ static int init_tcp_connection(netplay_t *netplay, const struct addrinfo *addr,
                   memcmp(netplay->mitm_session_id.unique, new_session.unique,
                      sizeof(netplay->mitm_session_id.unique)))
             {
+               int flen = 0;
+               char *session = base64(netplay->mitm_session_id.unique,
+                     sizeof(netplay->mitm_session_id.unique), &flen);
+               if (session)
+               {
+                  RARCH_LOG("[Netplay] Tunnel session id: %s\n", session);
+                  free(session);
+               }
+
                /* Initialize data for handling tunneled client connections. */
                netplay->mitm_handler = (struct netplay_mitm_handler*)
                   calloc(1, sizeof(*netplay->mitm_handler));
@@ -8593,11 +8602,25 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
 
    if (netplay->modus == NETPLAY_MODUS_GGPO)
    {
+      bool ggpo_require_tcp = true;
+
+      if (!netplay->is_server &&
+            (netplay_ggpo_rendezvous_enabled() || netplay_ggpo_relay_enabled()))
+         ggpo_require_tcp = false;
+
       netplay->ggpo_base_port = port;
       netplay->ggpo_peer_port = ggpo_peer_port;
 
-      if (!init_tcp_socket(netplay, server, mitm, port))
-         goto failure;
+      if (ggpo_require_tcp)
+      {
+         if (!init_tcp_socket(netplay, server, mitm, port))
+            goto failure;
+      }
+      else
+      {
+         if (!init_tcp_socket(netplay, server, mitm, port))
+            RARCH_WARN("[Netplay] GGPO control channel unavailable; continuing without TCP.\n");
+      }
       if (!netplay_init_buffers(netplay))
          goto failure;
       if (netplay_ggpo_relay_enabled())
@@ -8606,12 +8629,8 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
             goto failure;
          return netplay;
       }
-      if (netplay->is_server && netplay_ggpo_rendezvous_enabled())
-      {
-         if (!netplay_ggpo_rendezvous_start(netplay, port))
-            goto failure;
+      if (netplay_ggpo_rendezvous_enabled())
          return netplay;
-      }
       if (!netplay_ggpo_init_session(netplay, server, port))
          goto failure;
       return netplay;
@@ -10325,6 +10344,23 @@ static bool netplay_ggpo_pre_frame(netplay_t *netplay)
 
    if (!netplay->ggpo)
    {
+      if (netplay_ggpo_rendezvous_enabled() &&
+            !netplay->ggpo_rendezvous_active)
+      {
+         if (!netplay->state_size)
+         {
+            if (!netplay_wait_and_init_serialization(netplay))
+               return false;
+         }
+
+         if (!netplay_ggpo_rendezvous_start(netplay, netplay->ggpo_base_port))
+         {
+            RARCH_ERR("[Netplay] GGPO rendezvous failed to start.\n");
+            netplay_disconnect(netplay);
+         }
+         return false;
+      }
+
       if (netplay->ggpo_rendezvous_active)
       {
          if (netplay_ggpo_rendezvous_poll(netplay))
@@ -10610,7 +10646,6 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
    const char *mitm               = NULL;
    enum netplay_modus modus       = NETPLAY_MODUS_INPUT_FRAME_SYNC;
 #ifdef HAVE_GGPO
-   char ggpo_peer_address[NETPLAY_HOST_LONGSTR_LEN] = {0};
    uint16_t ggpo_peer_port = 0;
    bool ggpo_use_rendezvous = false;
    bool ggpo_use_relay = false;
@@ -10675,8 +10710,7 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
 
       server = NULL;
 
-      if (settings->bools.netplay_use_mitm_server &&
-            modus != NETPLAY_MODUS_GGPO)
+      if (settings->bools.netplay_use_mitm_server)
       {
          const char *mitm_handle = settings->arrays.netplay_mitm_server;
 
@@ -10721,12 +10755,7 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
          goto failure;
       }
 
-      if (!netplay_ggpo_rendezvous_resolve_peer(ggpo_peer_address,
-            sizeof(ggpo_peer_address), &ggpo_peer_port,
-            (uint16_t)(base_port + 1)))
-         goto failure;
-
-      server = ggpo_peer_address;
+      /* Defer rendezvous resolution until serialization is ready. */
       port = base_port;
    }
 #endif

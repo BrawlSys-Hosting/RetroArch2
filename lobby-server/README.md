@@ -17,6 +17,9 @@ Environment variables (loaded from `.env` if present):
 - `LOBBY_ROOM_TTL` (default `180` seconds)
 - `LOBBY_MAX_ROOMS` (default `512`)
 - `LOBBY_MITM_CONFIG` (default `mitm_servers.json`)
+- `LOBBY_TRUST_PROXY` (default unset; set to `1` to honor `X-Forwarded-For`)
+- `LOBBY_PUBLIC_IP` (optional public IP/hostname to replace private/loopback)
+- `LOBBY_PUBLIC_RENDEZVOUS` (optional public rendezvous host override)
 
 Example:
 
