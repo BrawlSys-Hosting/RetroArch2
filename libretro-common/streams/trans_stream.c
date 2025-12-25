@@ -86,6 +86,24 @@ const struct trans_stream_backend* trans_stream_get_zlib_inflate_backend(void)
 #endif
 }
 
+const struct trans_stream_backend* trans_stream_get_lz4_compress_backend(void)
+{
+#if HAVE_LZ4
+   return &lz4_compress_backend;
+#else
+   return NULL;
+#endif
+}
+
+const struct trans_stream_backend* trans_stream_get_lz4_decompress_backend(void)
+{
+#if HAVE_LZ4
+   return &lz4_decompress_backend;
+#else
+   return NULL;
+#endif
+}
+
 const struct trans_stream_backend* trans_stream_get_pipe_backend(void)
 {
    return &pipe_backend;

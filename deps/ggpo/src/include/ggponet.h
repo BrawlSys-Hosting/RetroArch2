@@ -303,6 +303,14 @@ typedef struct GGPONetworkStats {
    } timesync;
 } GGPONetworkStats;
 
+typedef struct GGPOStateStats {
+   int delta_frames;
+   int keyframes;
+   int delta_ratio_last;
+   int delta_ratio_avg;
+   int delta_ratio_max;
+} GGPOStateStats;
+
 /*
  * ggpo_start_session --
  *
@@ -519,6 +527,9 @@ GGPO_API GGPOErrorCode __cdecl ggpo_advance_frame(GGPOSession *);
 GGPO_API GGPOErrorCode __cdecl ggpo_get_network_stats(GGPOSession *,
                                                       GGPOPlayerHandle player,
                                                       GGPONetworkStats *stats);
+
+GGPO_API GGPOErrorCode __cdecl ggpo_get_state_stats(GGPOSession *ggpo,
+                                                    GGPOStateStats *stats);
 
 /*
  * ggpo_set_disconnect_timeout --

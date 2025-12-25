@@ -8,6 +8,7 @@
 #include "sync.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "lz4.h"
 
@@ -18,6 +19,9 @@ Sync::Sync(UdpMsg::connect_status *connect_status) :
    _last_confirmed_frame = -1;
    _max_prediction_frames = 0;
    _lz4_accel = 1;
+   _last_state_size = 0;
+   _last_state_frame = -1;
+   _last_state_valid = false;
    memset(&_savedstate, 0, sizeof(_savedstate));
 }
 
@@ -39,6 +43,12 @@ Sync::Init(Sync::Config &config)
    _callbacks = config.callbacks;
    _framecount = 0;
    _rollingback = false;
+   _last_state_valid = false;
+   _last_state_size = 0;
+   _last_state_frame = -1;
+   _last_state.clear();
+   _delta_buffer.clear();
+   _delta_stats = DeltaStats();
 
    _max_prediction_frames = config.num_prediction_frames;
    _lz4_accel = config.lz4_accel;
@@ -180,6 +190,105 @@ Sync::AdjustSimulation(int seek_to)
 }
 
 void
+Sync::UpdateLastState(const byte *state, int size, int frame)
+{
+   if (!state || size <= 0) {
+      _last_state_valid = false;
+      _last_state_size = 0;
+      _last_state_frame = -1;
+      _last_state.clear();
+      return;
+   }
+
+   if (_last_state.size() < (size_t)size) {
+      _last_state.resize(size);
+   }
+   memcpy(&_last_state[0], state, size);
+   _last_state_size = size;
+   _last_state_frame = frame;
+   _last_state_valid = true;
+}
+
+bool
+Sync::DecodeSavedFrame(const SavedFrame &state, std::vector<byte> &buffer)
+{
+   if (!state.buf || state.uncompressed_size <= 0) {
+      return false;
+   }
+
+   if (buffer.size() < (size_t)state.uncompressed_size) {
+      buffer.resize(state.uncompressed_size);
+   }
+
+   if (state.compressed) {
+      int decoded = LZ4_decompress_safe((const char *)state.buf,
+                                        (char *)&buffer[0],
+                                        state.cbuf,
+                                        state.uncompressed_size);
+      return decoded == state.uncompressed_size;
+   }
+
+   memcpy(&buffer[0], state.buf, state.uncompressed_size);
+   return true;
+}
+
+bool
+Sync::ReconstructFrame(int frame, std::vector<byte> &buffer)
+{
+   int base_frame = frame;
+   bool found_base = false;
+   SavedFrame *state = _savedstate.frames + FindSavedFrameIndex(frame);
+
+   if (!state->delta) {
+      return DecodeSavedFrame(*state, buffer);
+   }
+
+   while (base_frame >= 0) {
+      SavedFrame *base_state = _savedstate.frames + FindSavedFrameIndex(base_frame);
+      if (!base_state->delta) {
+         if (!DecodeSavedFrame(*base_state, buffer)) {
+            return false;
+         }
+         found_base = true;
+         break;
+      }
+      base_frame--;
+   }
+
+   if (!found_base) {
+      return false;
+   }
+
+   for (int f = base_frame + 1; f <= frame; f++) {
+      SavedFrame *delta_state = _savedstate.frames + FindSavedFrameIndex(f);
+      if (!delta_state->delta) {
+         if (!DecodeSavedFrame(*delta_state, buffer)) {
+            return false;
+         }
+         continue;
+      }
+
+      if (_delta_buffer.size() < (size_t)delta_state->uncompressed_size) {
+         _delta_buffer.resize(delta_state->uncompressed_size);
+      }
+
+      if (!DecodeSavedFrame(*delta_state, _delta_buffer)) {
+         return false;
+      }
+
+      if ((int)buffer.size() < delta_state->uncompressed_size) {
+         return false;
+      }
+
+      for (int i = 0; i < delta_state->uncompressed_size; i++) {
+         buffer[i] ^= _delta_buffer[i];
+      }
+   }
+
+   return true;
+}
+
+void
 Sync::LoadFrame(int frame)
 {
    // find the frame in question
@@ -196,7 +305,11 @@ Sync::LoadFrame(int frame)
        state->frame, state->uncompressed_size, state->checksum);
 
    ASSERT(state->buf && state->cbuf);
-   if (state->compressed) {
+   if (state->delta) {
+      ASSERT(ReconstructFrame(frame, _decompress_buffer));
+      _callbacks.load_game_state(&_decompress_buffer[0], state->uncompressed_size);
+      UpdateLastState(&_decompress_buffer[0], state->uncompressed_size, state->frame);
+   } else if (state->compressed) {
       ASSERT(state->uncompressed_size > 0);
       if (_decompress_buffer.size() < (size_t)state->uncompressed_size) {
          _decompress_buffer.resize(state->uncompressed_size);
@@ -208,8 +321,10 @@ Sync::LoadFrame(int frame)
                                        state->uncompressed_size);
       ASSERT(decoded == state->uncompressed_size);
       _callbacks.load_game_state(decompressed, state->uncompressed_size);
+      UpdateLastState(decompressed, state->uncompressed_size, state->frame);
    } else {
       _callbacks.load_game_state(state->buf, state->cbuf);
+      UpdateLastState(state->buf, state->cbuf, state->frame);
    }
 
    // Reset framecount and the head of the state ring-buffer to point in
@@ -233,23 +348,81 @@ Sync::SaveCurrentFrame()
    _callbacks.save_game_state(&state->buf, &state->cbuf, &state->checksum, state->frame);
    state->uncompressed_size = state->cbuf;
    state->compressed = false;
+   state->delta = false;
+
+   bool can_delta = _last_state_valid
+      && _last_state_size == state->uncompressed_size
+      && _last_state_frame == (state->frame - 1);
+   bool keyframe = (state->frame % GGPO_STATE_KEYFRAME_INTERVAL) == 0;
+   bool use_delta = can_delta && !keyframe;
+
+   if (use_delta) {
+      if (_delta_buffer.size() < (size_t)state->uncompressed_size) {
+         _delta_buffer.resize(state->uncompressed_size);
+      }
+      for (int i = 0; i < state->uncompressed_size; i++) {
+         _delta_buffer[i] = state->buf[i] ^ _last_state[i];
+      }
+   }
+
+   UpdateLastState(state->buf, state->uncompressed_size, state->frame);
 
    int max_compressed = LZ4_compressBound(state->uncompressed_size);
    char *compressed_buf = (char *)malloc(max_compressed);
    ASSERT(compressed_buf);
 
-   int compressed_size = LZ4_compress_fast((const char *)state->buf,
+   const char *compress_input = use_delta
+      ? (const char *)&_delta_buffer[0]
+      : (const char *)state->buf;
+
+   int compressed_size = LZ4_compress_fast(compress_input,
                                            compressed_buf,
                                            state->uncompressed_size,
                                            max_compressed,
                                            _lz4_accel);
-   if (compressed_size > 0 && compressed_size < state->uncompressed_size) {
-      _callbacks.free_buffer(state->buf);
-      state->buf = (byte *)compressed_buf;
-      state->cbuf = compressed_size;
-      state->compressed = true;
+   if (use_delta) {
+      state->delta = true;
+      if (compressed_size > 0 && compressed_size < state->uncompressed_size) {
+         _callbacks.free_buffer(state->buf);
+         state->buf = (byte *)compressed_buf;
+         state->cbuf = compressed_size;
+         state->compressed = true;
+      } else {
+         memcpy(compressed_buf, &_delta_buffer[0], state->uncompressed_size);
+         _callbacks.free_buffer(state->buf);
+         state->buf = (byte *)compressed_buf;
+         state->cbuf = state->uncompressed_size;
+         state->compressed = false;
+      }
    } else {
-      free(compressed_buf);
+      if (compressed_size > 0 && compressed_size < state->uncompressed_size) {
+         _callbacks.free_buffer(state->buf);
+         state->buf = (byte *)compressed_buf;
+         state->cbuf = compressed_size;
+         state->compressed = true;
+      } else {
+         free(compressed_buf);
+      }
+   }
+
+   if (state->delta) {
+      int ratio = 0;
+      if (state->uncompressed_size > 0) {
+         ratio = (int)(((unsigned long long)state->cbuf * 100ULL) /
+                       (unsigned long long)state->uncompressed_size);
+         if (ratio > 100) {
+            ratio = 100;
+         }
+      }
+      _delta_stats.delta_ratio_last = ratio;
+      if (ratio > _delta_stats.delta_ratio_max) {
+         _delta_stats.delta_ratio_max = ratio;
+      }
+      _delta_stats.delta_bytes_sum += (unsigned long long)state->cbuf;
+      _delta_stats.delta_raw_bytes_sum += (unsigned long long)state->uncompressed_size;
+      _delta_stats.delta_frames++;
+   } else {
+      _delta_stats.keyframes++;
    }
 
    Log("=== Saved frame info %d (size: %d  compressed: %d  checksum: %08x).\n",
@@ -273,7 +446,7 @@ Sync::FreeSavedFrameBuffer(SavedFrame &state)
    if (!state.buf) {
       return;
    }
-   if (state.compressed) {
+   if (state.compressed || state.delta) {
       free(state.buf);
    } else {
       _callbacks.free_buffer(state.buf);
@@ -282,6 +455,7 @@ Sync::FreeSavedFrameBuffer(SavedFrame &state)
    state.cbuf = 0;
    state.uncompressed_size = 0;
    state.compressed = false;
+   state.delta = false;
 }
 
 
@@ -361,4 +535,27 @@ Sync::GetEvent(Event &e)
    return false;
 }
 
+void
+Sync::GetStateStats(GGPOStateStats *stats)
+{
+   int avg_ratio = 0;
 
+   if (!stats) {
+      return;
+   }
+
+   memset(stats, 0, sizeof(*stats));
+   stats->delta_frames = _delta_stats.delta_frames;
+   stats->keyframes = _delta_stats.keyframes;
+   stats->delta_ratio_last = _delta_stats.delta_ratio_last;
+   stats->delta_ratio_max = _delta_stats.delta_ratio_max;
+
+   if (_delta_stats.delta_raw_bytes_sum > 0) {
+      avg_ratio = (int)((_delta_stats.delta_bytes_sum * 100ULL) /
+                        _delta_stats.delta_raw_bytes_sum);
+      if (avg_ratio > 100) {
+         avg_ratio = 100;
+      }
+   }
+   stats->delta_ratio_avg = avg_ratio;
+}

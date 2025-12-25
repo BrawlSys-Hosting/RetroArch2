@@ -20,12 +20,13 @@
 #endif
 
 #include <stdint.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <retro_inline.h>
 #include <compat/strl.h>
-#include <compat/intrinsics.h>
+#include <lz4.h>
 
 #include "state_manager.h"
 #include "msg_hash.h"
@@ -44,139 +45,18 @@
 /* Keep it off unless you're chasing a core bug, it slows things down. */
 #define STRICT_BUF_SIZE 0
 
-#ifndef UINT16_MAX
-#define UINT16_MAX 0xffff
-#endif
+#define STATE_DELTA_FLAG_RAW ((size_t)1)
+#define STATE_DELTA_HEADER_SIZE (sizeof(size_t) * 2)
 
-#ifndef UINT32_MAX
-#define UINT32_MAX 0xffffffffu
-#endif
-
-#if defined(__x86_64__) || defined(__i386__) || defined(__i486__) || defined(__i686__) || defined(_M_IX86) || defined(_M_AMD64) || defined(_M_X64)
-#define CPU_X86
-#endif
-
-/* Other arches SIGBUS (usually) on unaligned accesses. */
-#ifndef CPU_X86
-#define NO_UNALIGNED_MEM
-#endif
-
-#if __SSE2__
-#include <emmintrin.h>
-#endif
-
-/* There's no equivalent in libc, you'd think so ...
- * std::mismatch exists, but it's not optimized at all. */
-static size_t find_change(const uint16_t *a, const uint16_t *b)
-{
-#if __SSE2__
-   const __m128i *a128 = (const __m128i*)a;
-   const __m128i *b128 = (const __m128i*)b;
-
-   for (;;)
-   {
-      __m128i v0    = _mm_loadu_si128(a128);
-      __m128i v1    = _mm_loadu_si128(b128);
-      __m128i c     = _mm_cmpeq_epi8(v0, v1);
-      uint32_t mask = _mm_movemask_epi8(c);
-
-      if (mask != 0xffff) /* Something has changed, figure out where. */
-      {
-         /* calculate the real offset to the differing byte */
-         size_t ret = (((uint8_t*)a128 - (uint8_t*)a) |
-               (compat_ctz(~mask)));
-
-         /* and convert that to the uint16_t offset */
-         return (ret >> 1);
-      }
-
-      a128++;
-      b128++;
-   }
-#else
-   const uint16_t *a_org = a;
-#ifdef NO_UNALIGNED_MEM
-   while (((uintptr_t)a & (sizeof(size_t) - 1)) && *a == *b)
-   {
-      a++;
-      b++;
-   }
-   if (*a == *b)
-#endif
-   {
-      const size_t *a_big = (const size_t*)a;
-      const size_t *b_big = (const size_t*)b;
-
-      while (*a_big == *b_big)
-      {
-         a_big++;
-         b_big++;
-      }
-      a = (const uint16_t*)a_big;
-      b = (const uint16_t*)b_big;
-
-      while (*a == *b)
-      {
-         a++;
-         b++;
-      }
-   }
-   return a - a_org;
-#endif
-}
-
-static size_t find_same(const uint16_t *a, const uint16_t *b)
-{
-   const uint16_t *a_org = a;
-#ifdef NO_UNALIGNED_MEM
-   if (((uintptr_t)a & (sizeof(uint32_t) - 1)) && *a != *b)
-   {
-      a++;
-      b++;
-   }
-   if (*a != *b)
-#endif
-   {
-      /* With this, it's random whether two consecutive identical
-       * words are caught.
-       *
-       * Luckily, compression rate is the same for both cases, and
-       * three is always caught.
-       *
-       * (We prefer to miss two-word blocks, anyways; fewer iterations
-       * of the outer loop, as well as in the decompressor.) */
-      const uint32_t *a_big = (const uint32_t*)a;
-      const uint32_t *b_big = (const uint32_t*)b;
-
-      while (*a_big != *b_big)
-      {
-         a_big++;
-         b_big++;
-      }
-      a = (const uint16_t*)a_big;
-      b = (const uint16_t*)b_big;
-
-      if (a != a_org && a[-1] == b[-1])
-      {
-         a--;
-         b--;
-      }
-   }
-   return a - a_org;
-}
-
-/* Returns the maximum compressed size of a savestate.
- * It is very likely to compress to far less. */
+/* Returns the maximum compressed size of a savestate. */
 static size_t state_manager_raw_maxsize(size_t uncomp)
 {
-   /* bytes covered by a compressed block */
-   const int maxcblkcover = UINT16_MAX * sizeof(uint16_t);
-   /* uncompressed size, rounded to 16 bits */
-   size_t uncomp16        = (uncomp + sizeof(uint16_t) - 1) & -sizeof(uint16_t);
-   /* number of blocks */
-   size_t maxcblks        = (uncomp + maxcblkcover - 1) / maxcblkcover;
-   return uncomp16 + maxcblks * sizeof(uint16_t) * 2 /* two u16 overhead per block */ + sizeof(uint16_t) *
-      3; /* three u16 to end it */
+   size_t bound = uncomp;
+
+   if (uncomp <= (size_t)LZ4_MAX_INPUT_SIZE)
+      bound = (size_t)LZ4_compressBound((int)uncomp);
+
+   return STATE_DELTA_HEADER_SIZE + bound;
 }
 
 /*
@@ -207,116 +87,100 @@ static void *state_manager_raw_alloc(size_t len, uint16_t uniq)
    return ret;
 }
 
+static void state_manager_xor_delta(uint8_t *dst,
+      const uint8_t *a, const uint8_t *b, size_t len)
+{
+   size_t i;
+
+   for (i = 0; i < len; i++)
+      dst[i] = a[i] ^ b[i];
+}
+
 /*
- * Takes two savestates and creates a patch that turns 'src' into 'dst'.
+ * Takes two savestates and creates a patch that turns 'dst' into 'src'.
  * Both 'src' and 'dst' must be returned from state_manager_raw_alloc(),
- * with the same 'len', and different 'uniq'.
+ * with the same 'len'.
  *
  * 'patch' must be size 'state_manager_raw_maxsize(len)' or more.
  * Returns the number of bytes actually written to 'patch'.
  */
 static size_t state_manager_raw_compress(const void *src,
-      const void *dst, size_t len, void *patch)
+      const void *dst, size_t len, void *patch, uint8_t *scratch)
 {
-   const uint16_t  *old16 = (const uint16_t*)src;
-   const uint16_t  *new16 = (const uint16_t*)dst;
-   uint16_t *compressed16 = (uint16_t*)patch;
-   size_t          num16s = (len + sizeof(uint16_t) - 1)
-      / sizeof(uint16_t);
+   size_t *header          = (size_t*)patch;
+   uint8_t *payload        = (uint8_t*)patch + STATE_DELTA_HEADER_SIZE;
+   size_t payload_size     = 0;
+   size_t flags            = 0;
+   bool   use_compressed   = false;
 
-   while (num16s)
+   state_manager_xor_delta(scratch,
+         (const uint8_t*)src, (const uint8_t*)dst, len);
+
+   if (len <= (size_t)LZ4_MAX_INPUT_SIZE)
    {
-      size_t i, changed;
-      size_t skip = find_change(old16, new16);
+      int max_out     = LZ4_compressBound((int)len);
+      int compressed  = LZ4_compress_fast((const char*)scratch,
+            (char*)payload, (int)len, max_out, 1);
 
-      if (skip >= num16s)
-         break;
-
-      old16  += skip;
-      new16  += skip;
-      num16s -= skip;
-
-      if (skip > UINT16_MAX)
+      if (compressed > 0 && (size_t)compressed < len)
       {
-         /* This will make it scan the entire thing again,
-          * but it only hits on 8GB unchanged data anyways,
-          * and if you're doing that, you've got bigger problems. */
-         if (skip > UINT32_MAX)
-            skip         = UINT32_MAX;
-
-         *compressed16++ = 0;
-         *compressed16++ = skip;
-         *compressed16++ = skip >> 16;
-         continue;
+         payload_size   = (size_t)compressed;
+         use_compressed = true;
       }
-
-      changed = find_same(old16, new16);
-      if (changed > UINT16_MAX)
-         changed = UINT16_MAX;
-
-      *compressed16++ = changed;
-      *compressed16++ = skip;
-
-      for (i = 0; i < changed; i++)
-         compressed16[i] = old16[i];
-
-      old16        += changed;
-      new16        += changed;
-      num16s       -= changed;
-      compressed16 += changed;
    }
 
-   compressed16[0]  = 0;
-   compressed16[1]  = 0;
-   compressed16[2]  = 0;
+   if (!use_compressed)
+   {
+      memcpy(payload, scratch, len);
+      payload_size = len;
+      flags |= STATE_DELTA_FLAG_RAW;
+   }
 
-   return (uint8_t*)(compressed16 + 3) - (uint8_t*)patch;
+   header[0] = payload_size;
+   header[1] = flags;
+
+   return STATE_DELTA_HEADER_SIZE + payload_size;
 }
 
 /*
  * Takes 'patch' from a previous call to 'state_manager_raw_compress'
- * and applies it to 'data' ('src' from that call),
- * yielding 'dst' in that call.
- *
- * If the given arguments do not match a previous call to
- * state_manager_raw_compress(), anything at all can happen.
+ * and applies it to 'data' ('dst' from that call),
+ * yielding 'src' in that call.
  */
-static void state_manager_raw_decompress(const void *patch, void *data)
+static bool state_manager_raw_decompress(const void *patch, void *data,
+      size_t len, uint8_t *scratch)
 {
-   uint16_t         *out16 = (uint16_t*)data;
-   const uint16_t *patch16 = (const uint16_t*)patch;
+   const size_t *header    = (const size_t*)patch;
+   const uint8_t *payload  = (const uint8_t*)patch + STATE_DELTA_HEADER_SIZE;
+   size_t payload_size     = header[0];
+   size_t flags            = header[1];
+   size_t i;
 
-   for (;;)
+   if (flags & STATE_DELTA_FLAG_RAW)
    {
-      uint16_t numchanged  = *(patch16++);
-
-      if (numchanged)
-      {
-         uint16_t i;
-
-         out16       += *patch16++;
-
-         /* We could do memcpy, but it seems that memcpy has a
-          * constant-per-call overhead that actually shows up.
-          *
-          * Our average size in here seems to be 8 or something.
-          * Therefore, we do something with lower overhead. */
-         for (i = 0; i < numchanged; i++)
-            out16[i]  = patch16[i];
-
-         patch16     += numchanged;
-         out16       += numchanged;
-      }
-      else
-      {
-         uint32_t numunchanged = patch16[0] | (patch16[1] << 16);
-
-         if (!numunchanged)
-            break;
-         patch16 += 2;
-         out16   += numunchanged;
-      }
+      if (payload_size != len)
+         return false;
+      memcpy(scratch, payload, len);
    }
+   else
+   {
+      int decoded;
+
+      if (len > (size_t)INT_MAX)
+         return false;
+      if (payload_size > (size_t)INT_MAX)
+         return false;
+
+      decoded = LZ4_decompress_safe((const char*)payload,
+            (char*)scratch, (int)payload_size, (int)len);
+      if (decoded != (int)len)
+         return false;
+   }
+
+   for (i = 0; i < len; i++)
+      ((uint8_t*)data)[i] ^= scratch[i];
+
+   return true;
 }
 
 /* The start offsets point to 'nextstart' of any given compressed frame.
@@ -365,6 +229,8 @@ static void state_manager_free(state_manager_t *state)
       free(state->thisblock);
    if (state->nextblock)
       free(state->nextblock);
+   if (state->delta)
+      free(state->delta);
 #if STRICT_BUF_SIZE
    if (state->debugblock)
       free(state->debugblock);
@@ -373,6 +239,7 @@ static void state_manager_free(state_manager_t *state)
    state->data       = NULL;
    state->thisblock  = NULL;
    state->nextblock  = NULL;
+   state->delta      = NULL;
 }
 
 static state_manager_t *state_manager_new(
@@ -381,6 +248,7 @@ static state_manager_t *state_manager_new(
    size_t max_comp_size, block_size;
    uint8_t *next_block    = NULL;
    uint8_t *this_block    = NULL;
+   uint8_t *delta_block   = NULL;
    uint8_t *state_data    = NULL;
    state_manager_t *state = (state_manager_t*)calloc(1, sizeof(*state));
 
@@ -389,7 +257,7 @@ static state_manager_t *state_manager_new(
 
    block_size         = (state_size + sizeof(uint16_t) - 1) & -sizeof(uint16_t);
    /* the compressed data is surrounded by pointers to the other side */
-   max_comp_size      = state_manager_raw_maxsize(state_size) + sizeof(size_t) * 2;
+   max_comp_size      = state_manager_raw_maxsize(block_size) + sizeof(size_t) * 2;
    state_data         = (uint8_t*)malloc(buffer_size);
 
    if (!state_data)
@@ -397,8 +265,9 @@ static state_manager_t *state_manager_new(
 
    this_block         = (uint8_t*)state_manager_raw_alloc(state_size, 0);
    next_block         = (uint8_t*)state_manager_raw_alloc(state_size, 1);
+   delta_block        = (uint8_t*)malloc(block_size);
 
-   if (!this_block || !next_block)
+   if (!this_block || !next_block || !delta_block)
       goto error;
 
    state->blocksize   = block_size;
@@ -406,6 +275,7 @@ static state_manager_t *state_manager_new(
    state->data        = state_data;
    state->thisblock   = this_block;
    state->nextblock   = next_block;
+   state->delta       = delta_block;
    state->capacity    = buffer_size;
 
    state->head        = state->data + sizeof(size_t);
@@ -452,7 +322,12 @@ static bool state_manager_pop(state_manager_t *state, const void **data)
    compressed                   = state->data + start + sizeof(size_t);
    out                          = state->thisblock;
 
-   state_manager_raw_decompress(compressed, out);
+   if (!state_manager_raw_decompress(compressed, out,
+            state->blocksize, state->delta))
+   {
+      RARCH_ERR("[Rewind] Failed to decode state delta.\n");
+      return false;
+   }
 
    state->entries--;
    return true;
@@ -518,7 +393,7 @@ recheckcapacity:;
       compressed        = state->head + sizeof(size_t);
 
       compressed       += state_manager_raw_compress(oldb, newb,
-            state->blocksize, compressed);
+            state->blocksize, compressed, state->delta);
 
       if (compressed - state->data + state->maxcompsize > state->capacity)
       {

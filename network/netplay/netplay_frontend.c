@@ -39,6 +39,9 @@
 #include <encodings/base64.h>
 #include <features/features_cpu.h>
 #include <lrc_hash.h>
+#ifdef HAVE_LZ4
+#include <lz4.h>
+#endif
 
 #ifdef HAVE_IFINFO
 #include <net/net_ifinfo.h>
@@ -169,6 +172,11 @@
 #else
 #define NETPLAY_ASSERT_MODUS(m)
 #endif
+
+#define GGPO_STATE_LOG_INTERVAL_USEC 1000000
+
+static void netplay_free_state_bases(struct netplay_connection *connection);
+static bool netplay_resize_state_buffers(netplay_t *netplay, size_t state_size);
 
 struct nick_buf_s
 {
@@ -923,6 +931,7 @@ static void send_info_and_disconnect(netplay_t *netplay,
    connection->flags &= ~NETPLAY_CONN_FLAG_ACTIVE;
    netplay_deinit_socket_buffer(&connection->send_packet_buffer);
    netplay_deinit_socket_buffer(&connection->recv_packet_buffer);
+   netplay_free_state_bases(connection);
 }
 
 static uint32_t select_protocol(uint32_t lo_protocol, uint32_t hi_protocol)
@@ -944,13 +953,13 @@ static int select_compression(netplay_t *netplay, uint32_t compression)
 
    compression &= NETPLAY_COMPRESSION_SUPPORTED;
 
-   if (compression & NETPLAY_COMPRESSION_ZLIB)
+   if (compression & NETPLAY_COMPRESSION_LZ4)
    {
-      ctrans = &netplay->compress_zlib;
+      ctrans = &netplay->compress_lz4;
       if (!ctrans->compression_backend)
          ctrans->compression_backend =
-            trans_stream_get_zlib_deflate_backend();
-      ret = NETPLAY_COMPRESSION_ZLIB;
+            trans_stream_get_lz4_compress_backend();
+      ret = NETPLAY_COMPRESSION_LZ4;
    }
    else
    {
@@ -2170,6 +2179,62 @@ static const uint8_t* netplay_get_savestate_coremem(netplay_t* netplay, const ui
    }
 
    return input;
+}
+
+static void netplay_xor_delta(uint8_t *dst, const uint8_t *current,
+      const uint8_t *base, size_t size)
+{
+   size_t i;
+
+   for (i = 0; i < size; i++)
+      dst[i] = current[i] ^ base[i];
+}
+
+static void netplay_apply_delta(uint8_t *dst, const uint8_t *base,
+      const uint8_t *delta, size_t size)
+{
+   size_t i;
+
+   for (i = 0; i < size; i++)
+      dst[i] = base[i] ^ delta[i];
+}
+
+static void netplay_free_state_bases(struct netplay_connection *connection)
+{
+   free(connection->state_base_send);
+   free(connection->state_base_recv);
+   connection->state_base_send       = NULL;
+   connection->state_base_recv       = NULL;
+   connection->state_base_size       = 0;
+   connection->state_base_send_valid = false;
+   connection->state_base_recv_valid = false;
+}
+
+static bool netplay_resize_state_bases(netplay_t *netplay, size_t state_size)
+{
+   size_t i;
+
+   for (i = 0; i < netplay->connections_size; i++)
+   {
+      struct netplay_connection *connection = &netplay->connections[i];
+      uint8_t *send_base = (uint8_t*)realloc(connection->state_base_send,
+         state_size);
+      if (!send_base)
+         return false;
+      connection->state_base_send = send_base;
+
+      uint8_t *recv_base = (uint8_t*)realloc(connection->state_base_recv,
+         state_size);
+      if (!recv_base)
+         return false;
+      connection->state_base_recv = recv_base;
+
+      connection->state_base_size       = state_size;
+      connection->state_base_send_valid = false;
+      connection->state_base_recv_valid = false;
+   }
+
+   return true;
 }
 
 /**
@@ -4380,7 +4445,10 @@ static struct netplay_connection *allocate_connection(netplay_t *netplay)
          break;
    }
    if (i < netplay->connections_size)
+   {
+      netplay_free_state_bases(connection);
       memset(connection, 0, sizeof(*connection));
+   }
    else if (!netplay->connections_size)
    {
       netplay->connections =
@@ -4411,6 +4479,23 @@ static struct netplay_connection *allocate_connection(netplay_t *netplay)
 
       netplay->connections_size = new_size;
       netplay->connections      = new_connections;
+   }
+
+   if (netplay->state_size)
+   {
+      connection->state_base_send =
+         (uint8_t*)calloc(1, netplay->state_size);
+      connection->state_base_recv =
+         (uint8_t*)calloc(1, netplay->state_size);
+      if (!connection->state_base_send || !connection->state_base_recv)
+      {
+         netplay_free_state_bases(connection);
+         return NULL;
+      }
+
+      connection->state_base_size       = netplay->state_size;
+      connection->state_base_send_valid = false;
+      connection->state_base_recv_valid = false;
    }
 
    return connection;
@@ -6746,6 +6831,9 @@ static bool netplay_get_cmd(netplay_t *netplay,
             uint32_t i;
             uint32_t frame;
             uint32_t state_size, state_size_raw;
+            uint32_t flags       = 0;
+            uint32_t base_crc    = 0;
+            size_t   header_size = sizeof(frame) + sizeof(state_size);
             size_t   load_ptr;
             uint32_t load_frame_count;
             uint32_t rd, wn;
@@ -6758,7 +6846,10 @@ static bool netplay_get_cmd(netplay_t *netplay,
                return netplay_cmd_nak(netplay, connection);
             }
 
-            if (cmd_size < sizeof(frame) + sizeof(state_size))
+            if (connection->netplay_protocol >= 8)
+               header_size += sizeof(flags) + sizeof(base_crc);
+
+            if (cmd_size < header_size)
             {
                RARCH_ERR("[Netplay] Received invalid payload size for NETPLAY_CMD_LOAD_SAVESTATE.\n");
                return netplay_cmd_nak(netplay, connection);
@@ -6820,7 +6911,35 @@ static bool netplay_get_cmd(netplay_t *netplay,
             RECV(&state_size, sizeof(state_size))
                return false;
             state_size     = ntohl(state_size);
-            state_size_raw = cmd_size - (sizeof(frame) + sizeof(state_size));
+            if (connection->netplay_protocol >= 8)
+            {
+               RECV(&flags, sizeof(flags))
+                  return false;
+               flags = ntohl(flags);
+
+               RECV(&base_crc, sizeof(base_crc))
+                  return false;
+               base_crc = ntohl(base_crc);
+            }
+
+            state_size_raw = cmd_size - header_size;
+
+            switch (connection->compression_supported)
+            {
+               case NETPLAY_COMPRESSION_LZ4:
+                  ctrans = &netplay->compress_lz4;
+                  break;
+               default:
+                  ctrans = &netplay->compress_nil;
+                  break;
+            }
+
+            if (state_size > netplay->state_size)
+            {
+               /* other client state size is larger than ours, grow ours */
+               if (!netplay_resize_state_buffers(netplay, state_size))
+                  return false;
+            }
 
             if (state_size_raw > netplay->zbuffer_size)
             {
@@ -6831,37 +6950,71 @@ static bool netplay_get_cmd(netplay_t *netplay,
             RECV(netplay->zbuffer, state_size_raw)
                return false;
 
-            switch (connection->compression_supported)
-            {
-               case NETPLAY_COMPRESSION_ZLIB:
-                  ctrans = &netplay->compress_zlib;
-                  break;
-               default:
-                  ctrans = &netplay->compress_nil;
-                  break;
-            }
-
-            if (state_size > netplay->state_size)
-            {
-               /* other client state size is larger than ours, grow ours */
-               netplay->state_size = state_size;
-               for (i = 0; i < netplay->buffer_size; i++)
-               {
-                  netplay->buffer[i].state = realloc(netplay->buffer[i].state, netplay->state_size);
-                  if (!netplay->buffer[i].state)
-                     return false;
-               }
-            }
-
             ctrans->decompression_backend->set_in(
                ctrans->decompression_stream,
                netplay->zbuffer, state_size_raw);
-            ctrans->decompression_backend->set_out(
-               ctrans->decompression_stream,
-               (uint8_t*)netplay->buffer[load_ptr].state, state_size);
-            ctrans->decompression_backend->trans(
-               ctrans->decompression_stream,
-               true, &rd, &wn, NULL);
+
+            if (flags & NETPLAY_STATE_FLAG_DELTA)
+            {
+               uint32_t base_crc_local;
+
+               if (   !connection->state_base_recv_valid
+                   || !connection->state_base_recv
+                   ||  connection->state_base_size != state_size)
+               {
+                  RARCH_ERR("[Netplay] Missing base state for delta savestate.\n");
+                  netplay_cmd_request_savestate(netplay);
+                  return netplay_cmd_nak(netplay, connection);
+               }
+
+               base_crc_local = encoding_crc32(0L,
+                  connection->state_base_recv, state_size);
+               if (base_crc_local != base_crc)
+               {
+                  RARCH_ERR("[Netplay] Delta savestate base mismatch.\n");
+                  connection->state_base_recv_valid = false;
+                  netplay_cmd_request_savestate(netplay);
+                  return netplay_cmd_nak(netplay, connection);
+               }
+
+               ctrans->decompression_backend->set_out(
+                  ctrans->decompression_stream,
+                  netplay->delta_buffer, state_size);
+               if (!ctrans->decompression_backend->trans(
+                     ctrans->decompression_stream,
+                     true, &rd, &wn, NULL))
+               {
+                  RARCH_ERR("[Netplay] Failed to decompress delta savestate.\n");
+                  return netplay_cmd_nak(netplay, connection);
+               }
+
+               netplay_apply_delta(
+                  (uint8_t*)netplay->buffer[load_ptr].state,
+                  connection->state_base_recv,
+                  netplay->delta_buffer,
+                  state_size);
+            }
+            else
+            {
+               ctrans->decompression_backend->set_out(
+                  ctrans->decompression_stream,
+                  (uint8_t*)netplay->buffer[load_ptr].state, state_size);
+               if (!ctrans->decompression_backend->trans(
+                     ctrans->decompression_stream,
+                     true, &rd, &wn, NULL))
+               {
+                  RARCH_ERR("[Netplay] Failed to decompress savestate.\n");
+                  return netplay_cmd_nak(netplay, connection);
+               }
+            }
+
+            if (connection->state_base_recv
+                  && connection->state_base_size == state_size)
+            {
+               memcpy(connection->state_base_recv,
+                  netplay->buffer[load_ptr].state, state_size);
+               connection->state_base_recv_valid = true;
+            }
 
             if (memcmp(netplay->buffer[load_ptr].state, "NETPLAY", 7) != 0)
             {
@@ -7897,6 +8050,69 @@ static void netplay_write_block_header(unsigned char* output, const char* header
    output[7] = ((len >> 24) & 0xFF);
 }
 
+static size_t netplay_zbuffer_size_for_state(size_t state_size)
+{
+   size_t zbuffer_size = state_size * 2;
+
+#if HAVE_LZ4
+   if (state_size <= (size_t)LZ4_MAX_INPUT_SIZE)
+      zbuffer_size = (size_t)LZ4_compressBound((int)state_size);
+#endif
+
+   return zbuffer_size;
+}
+
+static bool netplay_resize_state_buffers(netplay_t *netplay, size_t state_size)
+{
+   size_t i;
+   size_t zbuffer_size = netplay_zbuffer_size_for_state(state_size);
+
+   for (i = 0; i < netplay->buffer_size; i++)
+   {
+      void *state = realloc(netplay->buffer[i].state, state_size);
+      if (!state)
+         return false;
+      netplay->buffer[i].state = state;
+   }
+
+   if (netplay->zbuffer)
+   {
+      uint8_t *zbuffer = (uint8_t*)realloc(netplay->zbuffer, zbuffer_size);
+      if (!zbuffer)
+         return false;
+      netplay->zbuffer = zbuffer;
+   }
+   else
+   {
+      netplay->zbuffer = (uint8_t*)calloc(1, zbuffer_size);
+      if (!netplay->zbuffer)
+         return false;
+   }
+   netplay->zbuffer_size = zbuffer_size;
+
+   if (netplay->delta_buffer)
+   {
+      uint8_t *delta_buffer = (uint8_t*)realloc(netplay->delta_buffer,
+         state_size);
+      if (!delta_buffer)
+         return false;
+      netplay->delta_buffer = delta_buffer;
+   }
+   else
+   {
+      netplay->delta_buffer = (uint8_t*)malloc(state_size);
+      if (!netplay->delta_buffer)
+         return false;
+   }
+   netplay->delta_buffer_size = state_size;
+
+   if (!netplay_resize_state_bases(netplay, state_size))
+      return false;
+
+   netplay->state_size = state_size;
+   return true;
+}
+
 static bool netplay_init_serialization(netplay_t *netplay)
 {
    size_t i;
@@ -7949,13 +8165,21 @@ static bool netplay_init_serialization(netplay_t *netplay)
          return false;
    }
 
-   netplay->zbuffer_size    = netplay->state_size * 2;
+   netplay->zbuffer_size = netplay_zbuffer_size_for_state(netplay->state_size);
    netplay->zbuffer         = (uint8_t*)calloc(1, netplay->zbuffer_size);
    if (!netplay->zbuffer)
    {
       netplay->zbuffer_size = 0;
       return false;
    }
+
+   netplay->delta_buffer_size = netplay->state_size;
+   netplay->delta_buffer      = (uint8_t*)malloc(netplay->delta_buffer_size);
+   if (!netplay->delta_buffer)
+      return false;
+
+   if (!netplay_resize_state_bases(netplay, netplay->state_size))
+      return false;
 
    return true;
 }
@@ -8056,17 +8280,52 @@ static bool __cdecl netplay_ggpo_begin_game(const char *game)
    return true;
 }
 
+static bool netplay_ggpo_update_delta_stats(netplay_t *netplay)
+{
+   GGPOStateStats stats = {0};
+
+   if (!netplay || !netplay->ggpo)
+      return false;
+
+   netplay->ggpo_delta_ratio_last = 0;
+   netplay->ggpo_delta_ratio_avg = 0;
+   netplay->ggpo_delta_ratio_max = 0;
+   netplay->ggpo_delta_frames = 0;
+   netplay->ggpo_delta_keyframes = 0;
+   netplay->ggpo_delta_stats_valid = false;
+
+   if (!GGPO_SUCCEEDED(ggpo_get_state_stats(netplay->ggpo, &stats)))
+      return false;
+
+   netplay->ggpo_delta_ratio_last = (uint32_t)stats.delta_ratio_last;
+   netplay->ggpo_delta_ratio_avg = (uint32_t)stats.delta_ratio_avg;
+   netplay->ggpo_delta_ratio_max = (uint32_t)stats.delta_ratio_max;
+   netplay->ggpo_delta_frames = (uint32_t)stats.delta_frames;
+   netplay->ggpo_delta_keyframes = (uint32_t)stats.keyframes;
+   netplay->ggpo_delta_stats_valid = stats.delta_frames > 0;
+
+   return true;
+}
+
 static bool __cdecl netplay_ggpo_save_game_state(
       unsigned char **buffer, int *len, int *checksum, int frame)
 {
    netplay_t *netplay = networking_driver_st.data;
    retro_ctx_serialize_info_t serial_info = {0};
    unsigned char *data = NULL;
+   retro_time_t start_usec;
+   retro_time_t end_usec;
+   uint32_t elapsed_us;
+   uint32_t save_avg_us = 0;
+   uint32_t load_avg_us = 0;
+   uint32_t delta_total = 0;
 
    (void)frame;
 
    if (!netplay || !len || !buffer)
       return false;
+
+   start_usec = cpu_features_get_time_usec();
 
    data = (unsigned char*)malloc(netplay->state_size);
    if (!data)
@@ -8086,6 +8345,51 @@ static bool __cdecl netplay_ggpo_save_game_state(
    if (checksum)
       *checksum = (int)encoding_crc32(0, data, serial_info.size);
 
+   end_usec = cpu_features_get_time_usec();
+   elapsed_us = (uint32_t)(end_usec - start_usec);
+
+   netplay->ggpo_state_save_us = elapsed_us;
+   netplay->ggpo_state_save_accum_us += elapsed_us;
+   netplay->ggpo_state_save_samples++;
+   if (elapsed_us > netplay->ggpo_state_save_max_us)
+      netplay->ggpo_state_save_max_us = elapsed_us;
+   netplay->ggpo_state_size = (uint32_t)serial_info.size;
+
+   if (verbosity_is_enabled())
+   {
+      if (!netplay->ggpo_state_log_time)
+         netplay->ggpo_state_log_time = end_usec;
+
+      if (end_usec - netplay->ggpo_state_log_time >=
+            GGPO_STATE_LOG_INTERVAL_USEC)
+      {
+         netplay_ggpo_update_delta_stats(netplay);
+
+         if (netplay->ggpo_state_save_samples)
+            save_avg_us = (uint32_t)(
+               netplay->ggpo_state_save_accum_us /
+               netplay->ggpo_state_save_samples);
+         if (netplay->ggpo_state_load_samples)
+            load_avg_us = (uint32_t)(
+               netplay->ggpo_state_load_accum_us /
+               netplay->ggpo_state_load_samples);
+
+         delta_total = netplay->ggpo_delta_frames +
+            netplay->ggpo_delta_keyframes;
+
+         RARCH_LOG("[GGPO] State size %u bytes, save avg %u us (last %u us, max %u us), load avg %u us (last %u us, max %u us), delta avg %u%% (last %u%%, max %u%%), KF %u/%u.\n",
+            netplay->ggpo_state_size, save_avg_us,
+            netplay->ggpo_state_save_us, netplay->ggpo_state_save_max_us,
+            load_avg_us, netplay->ggpo_state_load_us,
+            netplay->ggpo_state_load_max_us,
+            netplay->ggpo_delta_ratio_avg, netplay->ggpo_delta_ratio_last,
+            netplay->ggpo_delta_ratio_max,
+            netplay->ggpo_delta_keyframes, delta_total);
+
+         netplay->ggpo_state_log_time = end_usec;
+      }
+   }
+
    return true;
 }
 
@@ -8093,14 +8397,31 @@ static bool __cdecl netplay_ggpo_load_game_state(unsigned char *buffer, int len)
 {
    netplay_t *netplay = networking_driver_st.data;
    retro_ctx_serialize_info_t serial_info = {0};
+   retro_time_t start_usec;
+   retro_time_t end_usec;
+   uint32_t elapsed_us;
+   bool result;
 
    if (!netplay || !buffer || len <= 0)
       return false;
 
+   start_usec = cpu_features_get_time_usec();
+
    serial_info.data_const = buffer;
    serial_info.size = (size_t)len;
 
-   return netplay_process_savestate(netplay, &serial_info);
+   result = netplay_process_savestate(netplay, &serial_info);
+
+   end_usec = cpu_features_get_time_usec();
+   elapsed_us = (uint32_t)(end_usec - start_usec);
+
+   netplay->ggpo_state_load_us = elapsed_us;
+   netplay->ggpo_state_load_accum_us += elapsed_us;
+   netplay->ggpo_state_load_samples++;
+   if (elapsed_us > netplay->ggpo_state_load_max_us)
+      netplay->ggpo_state_load_max_us = elapsed_us;
+
+   return result;
 }
 
 static bool __cdecl netplay_ggpo_log_game_state(
@@ -8308,6 +8629,23 @@ static bool netplay_ggpo_init_session(netplay_t *netplay,
    if (!netplay->ggpo_local_input || !netplay->ggpo_sync_inputs)
       return false;
 
+   netplay->ggpo_state_save_accum_us = 0;
+   netplay->ggpo_state_load_accum_us = 0;
+   netplay->ggpo_state_save_samples = 0;
+   netplay->ggpo_state_load_samples = 0;
+   netplay->ggpo_state_size = 0;
+   netplay->ggpo_state_save_us = 0;
+   netplay->ggpo_state_load_us = 0;
+   netplay->ggpo_state_save_max_us = 0;
+   netplay->ggpo_state_load_max_us = 0;
+   netplay->ggpo_delta_ratio_last = 0;
+   netplay->ggpo_delta_ratio_avg = 0;
+   netplay->ggpo_delta_ratio_max = 0;
+   netplay->ggpo_delta_frames = 0;
+   netplay->ggpo_delta_keyframes = 0;
+   netplay->ggpo_delta_stats_valid = false;
+   netplay->ggpo_state_log_time = 0;
+
    cb.begin_game = netplay_ggpo_begin_game;
    cb.save_game_state = netplay_ggpo_save_game_state;
    cb.load_game_state = netplay_ggpo_load_game_state;
@@ -8415,6 +8753,8 @@ static void netplay_free(netplay_t *netplay)
          netplay_deinit_socket_buffer(&connection->send_packet_buffer);
          netplay_deinit_socket_buffer(&connection->recv_packet_buffer);
       }
+
+      netplay_free_state_bases(connection);
    }
 
    free(netplay->connections);
@@ -8429,6 +8769,7 @@ static void netplay_free(netplay_t *netplay)
    }
 
    free(netplay->zbuffer);
+   free(netplay->delta_buffer);
 
    if (netplay->compress_nil.compression_stream)
       netplay->compress_nil.compression_backend->stream_free(
@@ -8436,12 +8777,12 @@ static void netplay_free(netplay_t *netplay)
    if (netplay->compress_nil.decompression_stream)
       netplay->compress_nil.decompression_backend->stream_free(
          netplay->compress_nil.decompression_stream);
-   if (netplay->compress_zlib.compression_stream)
-      netplay->compress_zlib.compression_backend->stream_free(
-         netplay->compress_zlib.compression_stream);
-   if (netplay->compress_zlib.decompression_stream)
-      netplay->compress_zlib.decompression_backend->stream_free(
-         netplay->compress_zlib.decompression_stream);
+   if (netplay->compress_lz4.compression_stream)
+      netplay->compress_lz4.compression_backend->stream_free(
+         netplay->compress_lz4.compression_stream);
+   if (netplay->compress_lz4.decompression_stream)
+      netplay->compress_lz4.decompression_backend->stream_free(
+         netplay->compress_lz4.decompression_stream);
 
    free(netplay);
 }
@@ -8652,86 +8993,103 @@ failure:
  * netplay_send_savestate
  * @netplay              : pointer to netplay object
  * @serial_info          : the savestate being loaded
- * @cx                   : compression type
- * @z                    : compression backend to use
+ * @connection           : target connection
+ * @legacy_payload       : true if only coremem data should be sent
  *
  * Send a loaded savestate to those connected peers using the given compression
  * scheme.
  */
 static void netplay_send_savestate(netplay_t *netplay,
-   retro_ctx_serialize_info_t *serial_info, uint32_t cx,
-   struct compression_transcoder *z, bool is_legacy_data)
+   struct netplay_connection *connection,
+   retro_ctx_serialize_info_t *serial_info, bool legacy_payload)
 {
-   uint32_t header[4];
+   uint32_t header[6];
    uint32_t rd, wn;
-   size_t i;
-   bool has_legacy_connection = false;
+   size_t header_words;
+   struct compression_transcoder *ctrans = NULL;
+   const uint8_t *input = (const uint8_t*)serial_info->data_const;
+   size_t state_size    = serial_info->size;
+   uint32_t flags       = 0;
+   uint32_t base_crc    = 0;
+   bool use_delta       = false;
    NETPLAY_ASSERT_MODUS(NETPLAY_MODUS_INPUT_FRAME_SYNC);
 
+   if (   (!(connection->flags & NETPLAY_CONN_FLAG_ACTIVE))
+       || (connection->mode < NETPLAY_CONNECTION_CONNECTED))
+      return;
+
+   switch (connection->compression_supported)
+   {
+      case NETPLAY_COMPRESSION_LZ4:
+         ctrans = &netplay->compress_lz4;
+         break;
+      default:
+         ctrans = &netplay->compress_nil;
+         break;
+   }
+
+   if (!ctrans->compression_backend)
+      return;
+
+   if (connection->netplay_protocol >= 8 && !legacy_payload)
+   {
+      if (     connection->state_base_send_valid
+            && connection->state_base_send
+            && connection->state_base_size == state_size
+            && netplay->delta_buffer
+            && netplay->delta_buffer_size >= state_size)
+         use_delta = true;
+
+      if (use_delta)
+      {
+         netplay_xor_delta(netplay->delta_buffer, input,
+            connection->state_base_send, state_size);
+         flags    |= NETPLAY_STATE_FLAG_DELTA;
+         base_crc  = encoding_crc32(0L, connection->state_base_send,
+            state_size);
+         input     = netplay->delta_buffer;
+      }
+   }
+
    /* Compress it */
-   z->compression_backend->set_in(z->compression_stream,
-      (const uint8_t*)serial_info->data_const, (uint32_t)serial_info->size);
-   z->compression_backend->set_out(z->compression_stream,
+   ctrans->compression_backend->set_in(ctrans->compression_stream,
+      input, (uint32_t)state_size);
+   ctrans->compression_backend->set_out(ctrans->compression_stream,
       netplay->zbuffer, (uint32_t)netplay->zbuffer_size);
-   if (!z->compression_backend->trans(z->compression_stream, true, &rd,
-         &wn, NULL))
+   if (!ctrans->compression_backend->trans(ctrans->compression_stream, true,
+         &rd, &wn, NULL))
    {
       /* Catastrophe! */
-      for (i = 0; i < netplay->connections_size; i++)
-         netplay_hangup(netplay, &netplay->connections[i]);
+      netplay_hangup(netplay, connection);
       return;
    }
 
-   /* Send it to relevant peers */
+   header_words = (connection->netplay_protocol >= 8 && !legacy_payload) ? 6 : 4;
    header[0] = htonl(NETPLAY_CMD_LOAD_SAVESTATE);
-   header[1] = htonl(wn + 2*sizeof(uint32_t));
+   header[1] = htonl((uint32_t)(wn +
+      (header_words - 2) * sizeof(uint32_t)));
    header[2] = htonl(netplay->run_frame_count);
-   header[3] = htonl(serial_info->size);
-
-   for (i = 0; i < netplay->connections_size; i++)
+   header[3] = htonl((uint32_t)state_size);
+   if (header_words == 6)
    {
-      struct netplay_connection* connection = &netplay->connections[i];
-      bool can_send;
-
-      /* if is_legacy_data is false, only send to peers on protocol 7 or higher */
-      REQUIRE_PROTOCOL_VERSION(connection, 7)
-         can_send = !is_legacy_data;
-      else
-         can_send = is_legacy_data;
-
-      if (can_send)
-      {
-         if ( (!(connection->flags & NETPLAY_CONN_FLAG_ACTIVE))
-            ||  (connection->mode < NETPLAY_CONNECTION_CONNECTED)
-            ||  (connection->compression_supported != cx))
-            continue;
-
-         if (  !netplay_send(&connection->send_packet_buffer,
-                 connection->fd, header, sizeof(header))
-            || !netplay_send(&connection->send_packet_buffer,
-                 connection->fd, netplay->zbuffer, wn))
-            netplay_hangup(netplay, connection);
-      }
-      else
-      {
-         has_legacy_connection = true;
-      }
+      header[4] = htonl(flags);
+      header[5] = htonl(base_crc);
    }
 
-   if (has_legacy_connection && !is_legacy_data)
+   if (  !netplay_send(&connection->send_packet_buffer,
+            connection->fd, header, header_words * sizeof(uint32_t))
+      || !netplay_send(&connection->send_packet_buffer,
+            connection->fd, netplay->zbuffer, wn))
    {
-      /* at least one peer is not on protocol 7 or higher. extract the coremem segment
-       * and only send it. */
-      const uint8_t* input = netplay_get_savestate_coremem(netplay,
-            (const uint8_t*)serial_info->data_const);
+      netplay_hangup(netplay, connection);
+      return;
+   }
 
-      if (input != serial_info->data_const)
-      {
-         serial_info->data_const = input;
-         serial_info->size = netplay->coremem_size;
-
-         netplay_send_savestate(netplay, serial_info, cx, z, true);
-      }
+   if (connection->state_base_send
+         && connection->state_base_size == state_size)
+   {
+      memcpy(connection->state_base_send, serial_info->data_const, state_size);
+      connection->state_base_send_valid = true;
    }
 }
 
@@ -9045,13 +9403,25 @@ void netplay_load_savestate(netplay_t *netplay,
    /* Don't send it if we're expected to be desynced. */
    if (!netplay->desync)
    {
-      /* Send this to every peer. */
-      if (netplay->compress_nil.compression_backend)
-         netplay_send_savestate(netplay, serial_info, 0,
-            &netplay->compress_nil, false);
-      if (netplay->compress_zlib.compression_backend)
-         netplay_send_savestate(netplay, serial_info, NETPLAY_COMPRESSION_ZLIB,
-            &netplay->compress_zlib, false);
+      size_t i;
+      retro_ctx_serialize_info_t legacy_info = *serial_info;
+      const uint8_t *legacy_ptr = netplay_get_savestate_coremem(netplay,
+         (const uint8_t*)serial_info->data_const);
+
+      legacy_info.data_const = legacy_ptr;
+      legacy_info.size       = netplay->coremem_size;
+
+      for (i = 0; i < netplay->connections_size; i++)
+      {
+         struct netplay_connection *connection = &netplay->connections[i];
+         bool legacy_payload = connection->netplay_protocol < 7;
+         retro_ctx_serialize_info_t *send_info = legacy_payload
+            ? &legacy_info
+            : serial_info;
+
+         netplay_send_savestate(netplay, connection, send_info,
+            legacy_payload);
+      }
    }
 }
 
@@ -11093,6 +11463,19 @@ bool netplay_reinit_serialization(void)
       netplay->zbuffer = NULL;
    }
 
+   if (netplay->delta_buffer)
+   {
+      free(netplay->delta_buffer);
+      netplay->delta_buffer = NULL;
+   }
+   netplay->delta_buffer_size = 0;
+
+   for (i = 0; i < netplay->connections_size; i++)
+   {
+      netplay->connections[i].state_base_send_valid = false;
+      netplay->connections[i].state_base_recv_valid = false;
+   }
+
    return netplay_init_serialization(netplay);
 }
 
@@ -11861,6 +12244,13 @@ static void gfx_widget_netplay_ggpo_stats_iterate(void *user_data,
 #endif
 
    net_st->ggpo_stats_valid = false;
+   net_st->ggpo_state_stats_valid = false;
+   net_st->ggpo_delta_stats_valid = false;
+   net_st->ggpo_delta_ratio_last = 0;
+   net_st->ggpo_delta_ratio_avg = 0;
+   net_st->ggpo_delta_ratio_max = 0;
+   net_st->ggpo_delta_frames = 0;
+   net_st->ggpo_delta_keyframes = 0;
 
    if (!netplay || !settings->bools.netplay_ggpo_stats_show)
       return;
@@ -11888,6 +12278,31 @@ static void gfx_widget_netplay_ggpo_stats_iterate(void *user_data,
    net_st->ggpo_stats_remote_frames_behind = stats.timesync.remote_frames_behind;
    net_st->ggpo_stats_rollback_frames    = netplay->ggpo_rollback_frames;
    net_st->ggpo_stats_valid              = true;
+
+   net_st->ggpo_state_size               = netplay->ggpo_state_size;
+   net_st->ggpo_state_save_us            = netplay->ggpo_state_save_us;
+   net_st->ggpo_state_load_us            = netplay->ggpo_state_load_us;
+   net_st->ggpo_state_save_max_us        = netplay->ggpo_state_save_max_us;
+   net_st->ggpo_state_load_max_us        = netplay->ggpo_state_load_max_us;
+   net_st->ggpo_state_save_avg_us        = netplay->ggpo_state_save_samples
+      ? (uint32_t)(netplay->ggpo_state_save_accum_us /
+         netplay->ggpo_state_save_samples)
+      : 0;
+   net_st->ggpo_state_load_avg_us        = netplay->ggpo_state_load_samples
+      ? (uint32_t)(netplay->ggpo_state_load_accum_us /
+         netplay->ggpo_state_load_samples)
+      : 0;
+   net_st->ggpo_state_stats_valid        = netplay->ggpo_state_save_samples > 0;
+
+   if (netplay_ggpo_update_delta_stats(netplay))
+   {
+      net_st->ggpo_delta_ratio_last = netplay->ggpo_delta_ratio_last;
+      net_st->ggpo_delta_ratio_avg = netplay->ggpo_delta_ratio_avg;
+      net_st->ggpo_delta_ratio_max = netplay->ggpo_delta_ratio_max;
+      net_st->ggpo_delta_frames = netplay->ggpo_delta_frames;
+      net_st->ggpo_delta_keyframes = netplay->ggpo_delta_keyframes;
+      net_st->ggpo_delta_stats_valid = netplay->ggpo_delta_stats_valid;
+   }
 }
 
 static void gfx_widget_netplay_ggpo_stats_frame(void *data, void *userdata)
@@ -11898,21 +12313,42 @@ static void gfx_widget_netplay_ggpo_stats_frame(void *data, void *userdata)
    dispgfx_widget_t   *p_dispwidget = (dispgfx_widget_t*)userdata;
    gfx_display_t      *p_disp = (gfx_display_t*)video_info->disp_userdata;
    gfx_widget_font_data_t *font = &p_dispwidget->gfx_widget_fonts.regular;
+   bool show_state_stats = net_st->ggpo_state_stats_valid;
+   bool show_delta_stats = show_state_stats && net_st->ggpo_delta_stats_valid;
    int ping = net_st->ggpo_stats_ping;
    int send_queue = net_st->ggpo_stats_send_queue_len;
    int recv_queue = net_st->ggpo_stats_recv_queue_len;
    int local_behind = net_st->ggpo_stats_local_frames_behind;
    int remote_behind = net_st->ggpo_stats_remote_frames_behind;
    uint32_t rollback_frames = net_st->ggpo_stats_rollback_frames;
+   uint32_t state_size = net_st->ggpo_state_size;
+   uint32_t state_save_avg_us = net_st->ggpo_state_save_avg_us;
+   uint32_t state_load_avg_us = net_st->ggpo_state_load_avg_us;
+   uint32_t state_save_max_us = net_st->ggpo_state_save_max_us;
+   uint32_t state_load_max_us = net_st->ggpo_state_load_max_us;
+   uint32_t delta_ratio_avg = net_st->ggpo_delta_ratio_avg;
+   uint32_t delta_ratio_last = net_st->ggpo_delta_ratio_last;
+   uint32_t delta_ratio_max = net_st->ggpo_delta_ratio_max;
+   uint32_t delta_frames = net_st->ggpo_delta_frames;
+   uint32_t delta_keyframes = net_st->ggpo_delta_keyframes;
+   uint32_t delta_total = 0;
    char line1[64];
    char line2[64];
+   char line3[96];
+   char line4[96];
    size_t line1_len;
    size_t line2_len;
+   size_t line3_len = 0;
+   size_t line4_len = 0;
    int line1_width;
    int line2_width;
+   int line3_width = 0;
+   int line4_width = 0;
    int total_width;
    unsigned line_height = p_dispwidget->simple_widget_height;
-   unsigned total_height = line_height * 2;
+   unsigned total_lines = 2 + (show_state_stats ? 1 : 0) +
+      (show_delta_stats ? 1 : 0);
+   unsigned total_height = line_height * total_lines;
    unsigned ping_offset = settings->bools.netplay_ping_show ? line_height : 0;
    int y;
 
@@ -11929,13 +12365,40 @@ static void gfx_widget_netplay_ggpo_stats_frame(void *data, void *userdata)
    line2_len = (size_t)snprintf(line2, sizeof(line2),
          "ROLLBACKS: %u  BEHIND: %d/%d",
          rollback_frames, local_behind, remote_behind);
+   if (show_state_stats)
+      line3_len = (size_t)snprintf(line3, sizeof(line3),
+            "STATE %uB  S %u/%u us  L %u/%u us",
+            state_size, state_save_avg_us, state_save_max_us,
+            state_load_avg_us, state_load_max_us);
+   if (show_delta_stats)
+   {
+      delta_total = delta_frames + delta_keyframes;
+      line4_len = (size_t)snprintf(line4, sizeof(line4),
+            "DELTA avg %u%% (last %u%% max %u%%) KF %u/%u",
+            delta_ratio_avg, delta_ratio_last, delta_ratio_max,
+            delta_keyframes, delta_total);
+   }
 
    line1_width = font_driver_get_message_width(
          font->font, line1, line1_len, 1.0f);
    line2_width = font_driver_get_message_width(
          font->font, line2, line2_len, 1.0f);
-   total_width = (line1_width > line2_width ? line1_width : line2_width)
-         + p_dispwidget->simple_widget_padding * 2;
+   total_width = line1_width > line2_width ? line1_width : line2_width;
+   if (show_state_stats)
+   {
+      line3_width = font_driver_get_message_width(
+            font->font, line3, line3_len, 1.0f);
+      if (line3_width > total_width)
+         total_width = line3_width;
+   }
+   if (show_delta_stats)
+   {
+      line4_width = font_driver_get_message_width(
+            font->font, line4, line4_len, 1.0f);
+      if (line4_width > total_width)
+         total_width = line4_width;
+   }
+   total_width += p_dispwidget->simple_widget_padding * 2;
 
    y = (int)video_info->height - (int)total_height - (int)ping_offset;
    if (y < 0)
@@ -11977,6 +12440,34 @@ static void gfx_widget_netplay_ggpo_stats_frame(void *data, void *userdata)
          0xFFFFFFFF,
          TEXT_ALIGN_LEFT,
          true);
+
+   if (show_state_stats)
+   {
+      gfx_widgets_draw_text(
+            font,
+            line3,
+            video_info->width - line3_width - p_dispwidget->simple_widget_padding,
+            (float)y + (line_height * 2) + (line_height / 2.0f) + font->line_centre_offset,
+            video_info->width,
+            video_info->height,
+            0xFFFFFFFF,
+            TEXT_ALIGN_LEFT,
+            true);
+   }
+
+   if (show_delta_stats)
+   {
+      gfx_widgets_draw_text(
+            font,
+            line4,
+            video_info->width - line4_width - p_dispwidget->simple_widget_padding,
+            (float)y + (line_height * 3) + (line_height / 2.0f) + font->line_centre_offset,
+            video_info->width,
+            video_info->height,
+            0xFFFFFFFF,
+            TEXT_ALIGN_LEFT,
+            true);
+   }
 }
 #endif
 

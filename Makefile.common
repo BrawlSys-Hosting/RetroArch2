@@ -2168,6 +2168,11 @@ ifeq ($(HAVE_ZLIB_COMMON), 1)
    endif
 endif
 
+DEFINES += -DHAVE_LZ4
+INCLUDE_DIRS += -Ideps/lz4/lib
+OBJ += $(LIBRETRO_COMM_DIR)/streams/trans_stream_lz4.o \
+       deps/lz4/lib/lz4.o
+
 ifeq ($(HAVE_CDROM), 1)
    ifeq ($(CDROM_DEBUG), 1)
       DEFINES += -DCDROM_DEBUG
@@ -2362,7 +2367,7 @@ ifeq ($(HAVE_NETWORKING), 1)
 
    # GGPO netplay backend
    DEFINES += -DHAVE_GGPO
-   INCLUDE_DIRS += -Ideps/ggpo/src/include -Ideps/ggpo/src/lib/ggpo -Ideps/ggpo/src/lib/lz4
+   INCLUDE_DIRS += -Ideps/ggpo/src/include -Ideps/ggpo/src/lib/ggpo -Ideps/lz4/lib
    OBJ += \
       deps/ggpo/src/lib/ggpo/bitvector.o \
       deps/ggpo/src/lib/ggpo/game_input.o \
@@ -2376,8 +2381,7 @@ ifeq ($(HAVE_NETWORKING), 1)
       deps/ggpo/src/lib/ggpo/network/udp_proto.o \
       deps/ggpo/src/lib/ggpo/backends/p2p.o \
       deps/ggpo/src/lib/ggpo/backends/spectator.o \
-      deps/ggpo/src/lib/ggpo/backends/synctest.o \
-      deps/ggpo/src/lib/lz4/lz4.o
+      deps/ggpo/src/lib/ggpo/backends/synctest.o
 
    ifneq ($(findstring Win,$(OS)),)
       OBJ += deps/ggpo/src/lib/ggpo/platform_windows.o

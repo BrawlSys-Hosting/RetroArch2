@@ -171,6 +171,15 @@ ggpo_get_network_stats(GGPOSession *ggpo,
    return ggpo->GetNetworkStats(stats, player);
 }
 
+GGPOErrorCode
+ggpo_get_state_stats(GGPOSession *ggpo, GGPOStateStats *stats)
+{
+   if (!ggpo) {
+      return GGPO_ERRORCODE_INVALID_SESSION;
+   }
+   return ggpo->GetStateStats(stats);
+}
+
 
 GGPOErrorCode
 ggpo_close_session(GGPOSession *ggpo)

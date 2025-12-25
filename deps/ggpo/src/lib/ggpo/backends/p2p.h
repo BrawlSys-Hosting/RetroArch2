@@ -29,6 +29,7 @@ public:
    virtual GGPOErrorCode IncrementFrame(void);
    virtual GGPOErrorCode DisconnectPlayer(GGPOPlayerHandle handle);
    virtual GGPOErrorCode GetNetworkStats(GGPONetworkStats *stats, GGPOPlayerHandle handle);
+   virtual GGPOErrorCode GetStateStats(GGPOStateStats *stats);
    virtual GGPOErrorCode SetFrameDelay(GGPOPlayerHandle player, int delay);
    virtual GGPOErrorCode SetDisconnectTimeout(int timeout);
    virtual GGPOErrorCode SetDisconnectNotifyStart(int timeout);

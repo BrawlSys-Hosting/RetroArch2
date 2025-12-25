@@ -46,6 +46,7 @@ struct state_manager
 
    uint8_t *thisblock;
    uint8_t *nextblock;
+   uint8_t *delta;
 #if STRICT_BUF_SIZE
    uint8_t *debugblock;
    size_t debugsize;

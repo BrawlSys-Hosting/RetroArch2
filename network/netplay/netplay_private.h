@@ -79,11 +79,14 @@ struct addrinfo;
 
 /* Compression protocols supported */
 #define NETPLAY_COMPRESSION_ZLIB (1<<0)
-#if HAVE_ZLIB
-#define NETPLAY_COMPRESSION_SUPPORTED NETPLAY_COMPRESSION_ZLIB
+#define NETPLAY_COMPRESSION_LZ4  (1<<1)
+#if HAVE_LZ4
+#define NETPLAY_COMPRESSION_SUPPORTED NETPLAY_COMPRESSION_LZ4
 #else
 #define NETPLAY_COMPRESSION_SUPPORTED 0
 #endif
+
+#define NETPLAY_STATE_FLAG_DELTA (1U << 0)
 
 /* The keys supported by netplay */
 enum netplay_keys
@@ -430,6 +433,12 @@ struct netplay_connection
 
    uint8_t flags;
 
+   uint8_t *state_base_send;
+   uint8_t *state_base_recv;
+   size_t state_base_size;
+   bool state_base_send_valid;
+   bool state_base_recv_valid;
+
    /* Nickname of peer */
    char nick[NETPLAY_NICK_LEN];
 };
@@ -509,7 +518,7 @@ struct netplay
 
    /* Compression transcoder */
    struct compression_transcoder compress_nil;
-   struct compression_transcoder compress_zlib;
+   struct compression_transcoder compress_lz4;
 
    /* MITM session id */
    mitm_id_t mitm_session_id;
@@ -530,10 +539,12 @@ struct netplay
 
    /* A buffer into which to compress frames for transfer */
    uint8_t *zbuffer;
+   uint8_t *delta_buffer;
 
    size_t connections_size;
    size_t buffer_size;
    size_t zbuffer_size;
+   size_t delta_buffer_size;
    /* The size of our packet buffers */
    size_t packet_buffer_size;
    /* Size of savestates (coremem_size + cheevos_size + headers) */
@@ -714,6 +725,22 @@ struct netplay
    uint32_t ggpo_remote_devices;
    uint32_t *ggpo_sync_inputs;
    uint32_t *ggpo_local_input;
+   uint64_t ggpo_state_save_accum_us;
+   uint64_t ggpo_state_load_accum_us;
+   uint32_t ggpo_state_save_samples;
+   uint32_t ggpo_state_load_samples;
+   uint32_t ggpo_state_size;
+   uint32_t ggpo_state_save_us;
+   uint32_t ggpo_state_load_us;
+   uint32_t ggpo_state_save_max_us;
+   uint32_t ggpo_state_load_max_us;
+   uint32_t ggpo_delta_ratio_last;
+   uint32_t ggpo_delta_ratio_avg;
+   uint32_t ggpo_delta_ratio_max;
+   uint32_t ggpo_delta_frames;
+   uint32_t ggpo_delta_keyframes;
+   bool ggpo_delta_stats_valid;
+   retro_time_t ggpo_state_log_time;
    uint16_t ggpo_base_port;
    uint16_t ggpo_peer_port;
    int ggpo_rendezvous_fd;

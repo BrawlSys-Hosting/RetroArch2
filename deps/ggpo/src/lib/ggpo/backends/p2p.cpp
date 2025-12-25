@@ -533,6 +533,13 @@ Peer2PeerBackend::GetNetworkStats(GGPONetworkStats *stats, GGPOPlayerHandle play
 }
 
 GGPOErrorCode
+Peer2PeerBackend::GetStateStats(GGPOStateStats *stats)
+{
+   _sync.GetStateStats(stats);
+   return GGPO_OK;
+}
+
+GGPOErrorCode
 Peer2PeerBackend::SetFrameDelay(GGPOPlayerHandle player, int delay) 
 { 
    int queue;

@@ -157,12 +157,17 @@ SyncTestBackend::IncrementFrame(void)
    SavedInfo info;
    info.frame = frame;
    info.input = _last_input;
-   info.cbuf = _sync.GetLastSavedFrame().cbuf;
-   info.uncompressed_size = _sync.GetLastSavedFrame().uncompressed_size;
-   info.compressed = _sync.GetLastSavedFrame().compressed;
-   info.buf = (char *)malloc(info.cbuf);
-   memcpy(info.buf, _sync.GetLastSavedFrame().buf, info.cbuf);
-   info.checksum = _sync.GetLastSavedFrame().checksum;
+   {
+      Sync::SavedFrame &saved = _sync.GetLastSavedFrame();
+      std::vector<byte> state;
+      ASSERT(_sync.ReconstructFrame(saved.frame, state));
+      info.uncompressed_size = (int)state.size();
+      info.cbuf = info.uncompressed_size;
+      info.compressed = false;
+      info.buf = (char *)malloc(info.cbuf);
+      memcpy(info.buf, &state[0], info.cbuf);
+      info.checksum = saved.checksum;
+   }
    _saved_frames.push(info);
 
    if (frame - _last_verified == _check_distance) {
@@ -272,11 +277,16 @@ SyncTestBackend::LogSaveStates(SavedInfo &info)
 
    sprintf_s(filename, ARRAY_SIZE(filename), "synclogs%sstate-%04d-replay.log", GGPO_PATH_SEP, _sync.GetFrameCount());
    Sync::SavedFrame &replay = _sync.GetLastSavedFrame();
-   if (replay.compressed) {
-      unsigned char *state = DecompressStateBuffer((const char *)replay.buf, replay.cbuf, replay.uncompressed_size);
-      _callbacks.log_game_state(filename, state, replay.uncompressed_size);
-      free(state);
-   } else {
-      _callbacks.log_game_state(filename, replay.buf, replay.cbuf);
+   {
+      std::vector<byte> replay_state;
+      if (_sync.ReconstructFrame(replay.frame, replay_state)) {
+         _callbacks.log_game_state(filename, &replay_state[0], (int)replay_state.size());
+      } else if (replay.compressed) {
+         unsigned char *state = DecompressStateBuffer((const char *)replay.buf, replay.cbuf, replay.uncompressed_size);
+         _callbacks.log_game_state(filename, state, replay.uncompressed_size);
+         free(state);
+      } else {
+         _callbacks.log_game_state(filename, replay.buf, replay.cbuf);
+      }
    }
 }
