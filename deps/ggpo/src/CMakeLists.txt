@@ -6,6 +6,9 @@ add_library(GGPO
 
 add_common_flags(GGPO)
 
+find_package(Threads REQUIRED)
+target_link_libraries(GGPO PRIVATE Threads::Threads)
+
 target_include_directories(GGPO PUBLIC
 	$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 	$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/ggpo>

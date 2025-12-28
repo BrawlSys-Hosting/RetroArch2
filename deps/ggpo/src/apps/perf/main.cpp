@@ -52,7 +52,12 @@ static bool __cdecl SaveGameState(unsigned char **buffer, int *len, int *checksu
    }
 
    int size = (int)g_state.data.size();
-   unsigned char *copy = (unsigned char *)malloc(size);
+   unsigned char *copy = NULL;
+   if (buffer && *buffer && len && *len >= size) {
+      copy = *buffer;
+   } else {
+      copy = (unsigned char *)malloc(size);
+   }
    if (!copy) {
       return false;
    }
@@ -244,6 +249,7 @@ int main(int argc, char **argv)
    config.input_size = 4;
    config.num_prediction_frames = MAX_PREDICTION_FRAMES;
    config.lz4_accel = cfg.lz4_accel;
+   config.async_compress = 0;
 
    PerfSync sync(connect_status);
    sync.Init(config);

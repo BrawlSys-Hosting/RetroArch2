@@ -231,6 +231,14 @@ typedef struct settings
       unsigned netplay_chat_color_msg;
       unsigned netplay_input_latency_frames_min;
       unsigned netplay_input_latency_frames_range;
+      unsigned netplay_ggpo_disconnect_timeout;
+      unsigned netplay_ggpo_disconnect_notify_start;
+      unsigned netplay_ggpo_lz4_accel;
+      unsigned netplay_ggpo_network_delay;
+      unsigned netplay_ggpo_oop_percent;
+      unsigned netplay_ggpo_send_interval;
+      unsigned netplay_ggpo_max_input_bits;
+      unsigned netplay_ggpo_prediction_frames;
       unsigned netplay_share_digital;
       unsigned netplay_share_analog;
       unsigned bundle_assets_extract_version_current;

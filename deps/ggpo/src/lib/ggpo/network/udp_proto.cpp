@@ -9,6 +9,10 @@
 #include "udp_proto.h"
 #include "bitvector.h"
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
 static const int UDP_HEADER_SIZE = 28;     /* Size of IP + UDP headers */
 static const int NUM_SYNC_PACKETS = 5;
 static const int SYNC_RETRY_INTERVAL = 2000;
@@ -19,6 +23,7 @@ static const int QUALITY_REPORT_INTERVAL = 1000;
 static const int NETWORK_STATS_INTERVAL  = 1000;
 static const int UDP_SHUTDOWN_TIMER = 5000;
 static const int MAX_SEQ_DISTANCE = (1 << 15);
+static const int INPUT_BITS_PER_CHANGE = 2 + BITVECTOR_NIBBLE_SIZE;
 
 static bool SockAddrEqual(const sockaddr_in &a, const sockaddr_in &b)
 {
@@ -27,6 +32,148 @@ static bool SockAddrEqual(const sockaddr_in &a, const sockaddr_in &b)
 #else
    return a.sin_addr.s_addr == b.sin_addr.s_addr;
 #endif
+}
+
+static inline uint32 LoadLE32(const uint8 *ptr)
+{
+   return (uint32)ptr[0]
+      | ((uint32)ptr[1] << 8)
+      | ((uint32)ptr[2] << 16)
+      | ((uint32)ptr[3] << 24);
+}
+
+static inline int Popcount32(uint32 value)
+{
+#if defined(_MSC_VER)
+   return (int)__popcnt(value);
+#elif defined(__GNUC__) || defined(__clang__)
+   return __builtin_popcount(value);
+#else
+   int count = 0;
+   while (value) {
+      value &= (value - 1);
+      count++;
+   }
+   return count;
+#endif
+}
+
+static inline int Ctz32(uint32 value)
+{
+#if defined(_MSC_VER)
+   unsigned long index = 0;
+   _BitScanForward(&index, value);
+   return (int)index;
+#elif defined(__GNUC__) || defined(__clang__)
+   return __builtin_ctz(value);
+#else
+   int count = 0;
+   while ((value & 1) == 0) {
+      value >>= 1;
+      count++;
+   }
+   return count;
+#endif
+}
+
+static inline int GetBitValue(const uint8 *bits, int index)
+{
+   return (bits[index / 8] & (1 << (index % 8))) != 0;
+}
+
+static int CountDiffBits(const GameInput &current, const GameInput &last)
+{
+   const uint8 *cur = (const uint8 *)current.bits;
+   const uint8 *prev = (const uint8 *)last.bits;
+   int byte_len = current.size;
+   int count = 0;
+   int full_words = byte_len / 4;
+
+   for (int i = 0; i < full_words; ++i) {
+      uint32 diff = LoadLE32(cur + (i * 4)) ^ LoadLE32(prev + (i * 4));
+      if (diff) {
+         count += Popcount32(diff);
+      }
+   }
+
+   int tail = byte_len - (full_words * 4);
+   if (tail > 0) {
+      uint32 cur_tail = 0;
+      uint32 prev_tail = 0;
+      const uint8 *cur_ptr = cur + (full_words * 4);
+      const uint8 *prev_ptr = prev + (full_words * 4);
+      for (int i = 0; i < tail; ++i) {
+         cur_tail |= ((uint32)cur_ptr[i]) << (8 * i);
+         prev_tail |= ((uint32)prev_ptr[i]) << (8 * i);
+      }
+      uint32 diff = cur_tail ^ prev_tail;
+      if (diff) {
+         count += Popcount32(diff);
+      }
+   }
+
+   return count;
+}
+
+static void EmitDiffBits(uint8 *vector, int *offset, const GameInput &current, const GameInput &last)
+{
+   const uint8 *cur = (const uint8 *)current.bits;
+   const uint8 *prev = (const uint8 *)last.bits;
+   int byte_len = current.size;
+   int full_words = byte_len / 4;
+   int bit_base = 0;
+
+   for (int i = 0; i < full_words; ++i) {
+      uint32 diff = LoadLE32(cur + (i * 4)) ^ LoadLE32(prev + (i * 4));
+      while (diff) {
+         int bit = Ctz32(diff);
+         int index = bit_base + bit;
+         BitVector_SetBit(vector, offset);
+         if (GetBitValue(cur, index)) {
+            BitVector_SetBit(vector, offset);
+         } else {
+            BitVector_ClearBit(vector, offset);
+         }
+         BitVector_WriteNibblet(vector, index, offset);
+         diff &= (diff - 1);
+      }
+      bit_base += 32;
+   }
+
+   int tail = byte_len - (full_words * 4);
+   if (tail > 0) {
+      uint32 cur_tail = 0;
+      uint32 prev_tail = 0;
+      const uint8 *cur_ptr = cur + (full_words * 4);
+      const uint8 *prev_ptr = prev + (full_words * 4);
+      for (int i = 0; i < tail; ++i) {
+         cur_tail |= ((uint32)cur_ptr[i]) << (8 * i);
+         prev_tail |= ((uint32)prev_ptr[i]) << (8 * i);
+      }
+      uint32 diff = cur_tail ^ prev_tail;
+      while (diff) {
+         int bit = Ctz32(diff);
+         int index = bit_base + bit;
+         BitVector_SetBit(vector, offset);
+         if (GetBitValue(cur, index)) {
+            BitVector_SetBit(vector, offset);
+         } else {
+            BitVector_ClearBit(vector, offset);
+         }
+         BitVector_WriteNibblet(vector, index, offset);
+         diff &= (diff - 1);
+      }
+   }
+}
+
+static int EstimateInputBits(const GameInput &current, const GameInput &last)
+{
+   int bits = 1; // frame terminator
+   int changed_bits = CountDiffBits(current, last);
+   if (changed_bits) {
+      bits += changed_bits * INPUT_BITS_PER_CHANGE;
+   }
+   return bits;
 }
 
 UdpProtocol::UdpProtocol() :
@@ -62,7 +209,15 @@ UdpProtocol::UdpProtocol() :
    _oo_packet.msg = NULL;
 
    _send_latency = Platform::GetConfigInt("ggpo.network.delay");
+   _send_interval = Platform::GetConfigInt("ggpo.network.send_interval");
+   if (_send_interval < 0) {
+      _send_interval = 0;
+   }
    _oop_percent = Platform::GetConfigInt("ggpo.oop.percent");
+   _max_input_bits = Platform::GetConfigInt("ggpo.network.max_input_bits");
+   if (_max_input_bits <= 0 || _max_input_bits > (MAX_COMPRESSED_BITS - 1)) {
+      _max_input_bits = MAX_COMPRESSED_BITS - 1;
+   }
 }
 
 UdpProtocol::~UdpProtocol()
@@ -119,8 +274,15 @@ UdpProtocol::SendInput(GameInput &input)
 void
 UdpProtocol::SendPendingOutput()
 {
+   if (_send_interval > 0 && _last_send_time) {
+      unsigned int now = Platform::GetCurrentTimeMS();
+      if (now - _last_send_time < (unsigned int)_send_interval) {
+         return;
+      }
+   }
+
    UdpMsg *msg = new UdpMsg(UdpMsg::Input);
-   int i, j, offset = 0;
+   int j, offset = 0;
    uint8 *bits;
    GameInput last;
 
@@ -132,19 +294,23 @@ UdpProtocol::SendPendingOutput()
       msg->u.input.input_size = (uint8)_pending_output.front().size;
 
       ASSERT(last.frame == -1 || last.frame + 1 == msg->u.input.start_frame);
+      int max_bits = _max_input_bits;
+      int first_bits = EstimateInputBits(_pending_output.front(), last);
+      if (first_bits > max_bits) {
+         max_bits = first_bits;
+      }
+      if (max_bits > (MAX_COMPRESSED_BITS - 1)) {
+         max_bits = MAX_COMPRESSED_BITS - 1;
+      }
+
       for (j = 0; j < _pending_output.size(); j++) {
          GameInput &current = _pending_output.item(j);
-         if (memcmp(current.bits, last.bits, current.size) != 0) {
-            ASSERT((GAMEINPUT_MAX_BYTES * GAMEINPUT_MAX_PLAYERS * 8) < (1 << BITVECTOR_NIBBLE_SIZE));
-            for (i = 0; i < current.size * 8; i++) {
-               ASSERT(i < (1 << BITVECTOR_NIBBLE_SIZE));
-               if (current.value(i) != last.value(i)) {
-                  BitVector_SetBit(msg->u.input.bits, &offset);
-                  (current.value(i) ? BitVector_SetBit : BitVector_ClearBit)(bits, &offset);
-                  BitVector_WriteNibblet(bits, i, &offset);
-               }
-            }
+         int required_bits = EstimateInputBits(current, last);
+         if (offset + required_bits > max_bits) {
+            break;
          }
+         ASSERT((GAMEINPUT_MAX_BYTES * GAMEINPUT_MAX_PLAYERS * 8) < (1 << BITVECTOR_NIBBLE_SIZE));
+         EmitDiffBits(bits, &offset, current, last);
          BitVector_ClearBit(msg->u.input.bits, &offset);
          last = _last_sent_input = current;
       }

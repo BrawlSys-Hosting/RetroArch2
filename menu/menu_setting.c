@@ -23479,6 +23479,142 @@ static bool setting_append_list(
             (*list)[list_info->index - 1].action_ok = &setting_action_ok_uint;
             menu_settings_list_current_add_range(list, list_info, 0, 15, 1, true, true);
 
+            CONFIG_UINT(
+                  list, list_info,
+                  &settings->uints.netplay_ggpo_disconnect_timeout,
+                  MENU_ENUM_LABEL_NETPLAY_GGPO_DISCONNECT_TIMEOUT,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_DISCONNECT_TIMEOUT,
+                  DEFAULT_NETPLAY_GGPO_DISCONNECT_TIMEOUT,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            (*list)[list_info->index - 1].ui_type   = ST_UI_TYPE_UINT_SPINBOX;
+            (*list)[list_info->index - 1].action_ok = &setting_action_ok_uint;
+            menu_settings_list_current_add_range(list, list_info, 0, 60000, 100, true, true);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ALLOW_INPUT);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ADVANCED);
+
+            CONFIG_UINT(
+                  list, list_info,
+                  &settings->uints.netplay_ggpo_disconnect_notify_start,
+                  MENU_ENUM_LABEL_NETPLAY_GGPO_DISCONNECT_NOTIFY_START,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_DISCONNECT_NOTIFY_START,
+                  DEFAULT_NETPLAY_GGPO_DISCONNECT_NOTIFY_START,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            (*list)[list_info->index - 1].ui_type   = ST_UI_TYPE_UINT_SPINBOX;
+            (*list)[list_info->index - 1].action_ok = &setting_action_ok_uint;
+            menu_settings_list_current_add_range(list, list_info, 0, 60000, 100, true, true);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ALLOW_INPUT);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ADVANCED);
+
+            CONFIG_UINT(
+                  list, list_info,
+                  &settings->uints.netplay_ggpo_lz4_accel,
+                  MENU_ENUM_LABEL_NETPLAY_GGPO_LZ4_ACCEL,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_LZ4_ACCEL,
+                  DEFAULT_NETPLAY_GGPO_LZ4_ACCEL,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            (*list)[list_info->index - 1].ui_type   = ST_UI_TYPE_UINT_SPINBOX;
+            (*list)[list_info->index - 1].action_ok = &setting_action_ok_uint;
+            menu_settings_list_current_add_range(list, list_info, 0, 16, 1, true, true);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ALLOW_INPUT);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ADVANCED);
+
+            CONFIG_UINT(
+                  list, list_info,
+                  &settings->uints.netplay_ggpo_send_interval,
+                  MENU_ENUM_LABEL_NETPLAY_GGPO_SEND_INTERVAL,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_SEND_INTERVAL,
+                  DEFAULT_NETPLAY_GGPO_SEND_INTERVAL,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            (*list)[list_info->index - 1].ui_type   = ST_UI_TYPE_UINT_SPINBOX;
+            (*list)[list_info->index - 1].action_ok = &setting_action_ok_uint;
+            menu_settings_list_current_add_range(list, list_info, 0, 1000, 1, true, true);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ALLOW_INPUT);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ADVANCED);
+
+            CONFIG_UINT(
+                  list, list_info,
+                  &settings->uints.netplay_ggpo_max_input_bits,
+                  MENU_ENUM_LABEL_NETPLAY_GGPO_MAX_INPUT_BITS,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_MAX_INPUT_BITS,
+                  DEFAULT_NETPLAY_GGPO_MAX_INPUT_BITS,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            (*list)[list_info->index - 1].ui_type   = ST_UI_TYPE_UINT_SPINBOX;
+            (*list)[list_info->index - 1].action_ok = &setting_action_ok_uint;
+            menu_settings_list_current_add_range(list, list_info, 0, 4095, 1, true, true);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ALLOW_INPUT);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ADVANCED);
+
+            CONFIG_UINT(
+                  list, list_info,
+                  &settings->uints.netplay_ggpo_prediction_frames,
+                  MENU_ENUM_LABEL_NETPLAY_GGPO_PREDICTION_FRAMES,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_PREDICTION_FRAMES,
+                  DEFAULT_NETPLAY_GGPO_PREDICTION_FRAMES,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            (*list)[list_info->index - 1].ui_type   = ST_UI_TYPE_UINT_SPINBOX;
+            (*list)[list_info->index - 1].action_ok = &setting_action_ok_uint;
+            menu_settings_list_current_add_range(list, list_info, 0, 8, 1, true, true);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ALLOW_INPUT);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ADVANCED);
+
+            CONFIG_UINT(
+                  list, list_info,
+                  &settings->uints.netplay_ggpo_network_delay,
+                  MENU_ENUM_LABEL_NETPLAY_GGPO_NETWORK_DELAY,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_NETWORK_DELAY,
+                  DEFAULT_NETPLAY_GGPO_NETWORK_DELAY,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            (*list)[list_info->index - 1].ui_type   = ST_UI_TYPE_UINT_SPINBOX;
+            (*list)[list_info->index - 1].action_ok = &setting_action_ok_uint;
+            menu_settings_list_current_add_range(list, list_info, 0, 1000, 1, true, true);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ALLOW_INPUT);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ADVANCED);
+
+            CONFIG_UINT(
+                  list, list_info,
+                  &settings->uints.netplay_ggpo_oop_percent,
+                  MENU_ENUM_LABEL_NETPLAY_GGPO_OOP_PERCENT,
+                  MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_OOP_PERCENT,
+                  DEFAULT_NETPLAY_GGPO_OOP_PERCENT,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            (*list)[list_info->index - 1].ui_type   = ST_UI_TYPE_UINT_SPINBOX;
+            (*list)[list_info->index - 1].action_ok = &setting_action_ok_uint;
+            menu_settings_list_current_add_range(list, list_info, 0, 100, 1, true, true);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ALLOW_INPUT);
+            SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_ADVANCED);
+
             CONFIG_BOOL(
                   list, list_info,
                   &settings->bools.netplay_nat_traversal,

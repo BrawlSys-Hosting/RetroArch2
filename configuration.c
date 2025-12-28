@@ -2614,6 +2614,14 @@ static struct config_uint_setting *populate_settings_uint(
    SETTING_UINT("netplay_chat_color_msg",             &settings->uints.netplay_chat_color_msg, true, DEFAULT_NETPLAY_CHAT_COLOR_MSG, false);
    SETTING_UINT("netplay_input_latency_frames_min",   &settings->uints.netplay_input_latency_frames_min, true, 0, false);
    SETTING_UINT("netplay_input_latency_frames_range", &settings->uints.netplay_input_latency_frames_range, true, 0, false);
+   SETTING_UINT("netplay_ggpo_disconnect_timeout",    &settings->uints.netplay_ggpo_disconnect_timeout, true, DEFAULT_NETPLAY_GGPO_DISCONNECT_TIMEOUT, false);
+   SETTING_UINT("netplay_ggpo_disconnect_notify_start", &settings->uints.netplay_ggpo_disconnect_notify_start, true, DEFAULT_NETPLAY_GGPO_DISCONNECT_NOTIFY_START, false);
+   SETTING_UINT("netplay_ggpo_lz4_accel",             &settings->uints.netplay_ggpo_lz4_accel, true, DEFAULT_NETPLAY_GGPO_LZ4_ACCEL, false);
+   SETTING_UINT("netplay_ggpo_network_delay",         &settings->uints.netplay_ggpo_network_delay, true, DEFAULT_NETPLAY_GGPO_NETWORK_DELAY, false);
+   SETTING_UINT("netplay_ggpo_oop_percent",           &settings->uints.netplay_ggpo_oop_percent, true, DEFAULT_NETPLAY_GGPO_OOP_PERCENT, false);
+   SETTING_UINT("netplay_ggpo_send_interval",         &settings->uints.netplay_ggpo_send_interval, true, DEFAULT_NETPLAY_GGPO_SEND_INTERVAL, false);
+   SETTING_UINT("netplay_ggpo_max_input_bits",        &settings->uints.netplay_ggpo_max_input_bits, true, DEFAULT_NETPLAY_GGPO_MAX_INPUT_BITS, false);
+   SETTING_UINT("netplay_ggpo_prediction_frames",     &settings->uints.netplay_ggpo_prediction_frames, true, DEFAULT_NETPLAY_GGPO_PREDICTION_FRAMES, false);
    SETTING_UINT("netplay_share_digital",              &settings->uints.netplay_share_digital, true, DEFAULT_NETPLAY_SHARE_DIGITAL, false);
    SETTING_UINT("netplay_share_analog",               &settings->uints.netplay_share_analog,  true, DEFAULT_NETPLAY_SHARE_ANALOG, false);
 #endif

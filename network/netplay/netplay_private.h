@@ -739,6 +739,12 @@ struct netplay
    uint32_t ggpo_delta_ratio_max;
    uint32_t ggpo_delta_frames;
    uint32_t ggpo_delta_keyframes;
+   uint32_t ggpo_compress_job_queue_len;
+   uint32_t ggpo_compress_result_queue_len;
+   uint32_t ggpo_compress_pending_count;
+   uint32_t ggpo_compress_job_queue_max;
+   uint32_t ggpo_compress_result_queue_max;
+   bool ggpo_compress_stats_valid;
    bool ggpo_delta_stats_valid;
    retro_time_t ggpo_state_log_time;
    uint16_t ggpo_base_port;

@@ -19,7 +19,8 @@ Environment variables (loaded from `.env` if present):
 - `RELAY_SESSION_TTL` (default `120` seconds)
 - `RELAY_CLIENT_TTL` (default `30` seconds)
 - `RELAY_MAX_SESSIONS` (default `512`)
-- `RELAY_MAX_PACKET` (default `2048` bytes)
+- `RELAY_MAX_PACKET` (default `8192` bytes)
+- `RELAY_MAGIC` (default `RARELAY1`)
 
 ## Protocol
 

@@ -209,11 +209,16 @@ typedef struct {
    bool (__cdecl *begin_game)(const char *game);
 
    /*
-    * save_game_state - The client should allocate a buffer, copy the
-    * entire contents of the current game state into it, and copy the
-    * length into the *len parameter.  Optionally, the client can compute
-    * a checksum of the data and store it in the *checksum argument.
-    */
+   * save_game_state - The client should allocate a buffer, copy the
+   * entire contents of the current game state into it, and copy the
+   * length into the *len parameter.  Optionally, the client can compute
+   * a checksum of the data and store it in the *checksum argument.
+   *
+   * If *buffer is non-null and *len is greater than zero, GGPO may be
+   * providing a reuse buffer.  If the buffer is large enough, you can
+   * serialize into it and set *buffer to the same pointer to avoid
+   * per-frame allocations.
+   */
    bool (__cdecl *save_game_state)(unsigned char **buffer, int *len, int *checksum, int frame);
 
    /*
@@ -309,6 +314,11 @@ typedef struct GGPOStateStats {
    int delta_ratio_last;
    int delta_ratio_avg;
    int delta_ratio_max;
+   int compress_job_queue_len;
+   int compress_result_queue_len;
+   int compress_pending_count;
+   int compress_job_queue_max;
+   int compress_result_queue_max;
 } GGPOStateStats;
 
 /*

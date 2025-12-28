@@ -35,7 +35,11 @@ Peer2PeerBackend::Peer2PeerBackend(GGPOSessionCallbacks *cb,
    config.num_players = num_players;
    config.input_size = input_size;
    config.callbacks = _callbacks;
-   config.num_prediction_frames = MAX_PREDICTION_FRAMES;
+   config.num_prediction_frames = Platform::GetConfigInt("ggpo.sync.prediction_frames");
+   if (config.num_prediction_frames <= 0 ||
+         config.num_prediction_frames > MAX_PREDICTION_FRAMES)
+      config.num_prediction_frames = MAX_PREDICTION_FRAMES;
+   config.async_compress = 1;
    _sync.Init(config);
 
    /*

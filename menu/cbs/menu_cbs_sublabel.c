@@ -1319,6 +1319,14 @@ DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_rendezvous_room,            
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_relay_server,             MENU_ENUM_SUBLABEL_NETPLAY_GGPO_RELAY_SERVER)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_relay_port,               MENU_ENUM_SUBLABEL_NETPLAY_GGPO_RELAY_PORT)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_relay_session,            MENU_ENUM_SUBLABEL_NETPLAY_GGPO_RELAY_SESSION)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_disconnect_timeout,       MENU_ENUM_SUBLABEL_NETPLAY_GGPO_DISCONNECT_TIMEOUT)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_disconnect_notify_start,  MENU_ENUM_SUBLABEL_NETPLAY_GGPO_DISCONNECT_NOTIFY_START)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_lz4_accel,                 MENU_ENUM_SUBLABEL_NETPLAY_GGPO_LZ4_ACCEL)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_send_interval,            MENU_ENUM_SUBLABEL_NETPLAY_GGPO_SEND_INTERVAL)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_max_input_bits,           MENU_ENUM_SUBLABEL_NETPLAY_GGPO_MAX_INPUT_BITS)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_prediction_frames,        MENU_ENUM_SUBLABEL_NETPLAY_GGPO_PREDICTION_FRAMES)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_network_delay,            MENU_ENUM_SUBLABEL_NETPLAY_GGPO_NETWORK_DELAY)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_netplay_ggpo_oop_percent,              MENU_ENUM_SUBLABEL_NETPLAY_GGPO_OOP_PERCENT)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_core_lock,                             MENU_ENUM_SUBLABEL_CORE_LOCK)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_core_set_standalone_exempt,            MENU_ENUM_SUBLABEL_CORE_SET_STANDALONE_EXEMPT)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_core_delete,                           MENU_ENUM_SUBLABEL_CORE_DELETE)
@@ -5592,6 +5600,30 @@ int menu_cbs_init_bind_sublabel(menu_file_list_cbs_t *cbs,
             break;
          case MENU_ENUM_LABEL_NETPLAY_GGPO_RELAY_SESSION:
             BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_ggpo_relay_session);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_GGPO_DISCONNECT_TIMEOUT:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_ggpo_disconnect_timeout);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_GGPO_DISCONNECT_NOTIFY_START:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_ggpo_disconnect_notify_start);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_GGPO_LZ4_ACCEL:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_ggpo_lz4_accel);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_GGPO_SEND_INTERVAL:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_ggpo_send_interval);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_GGPO_MAX_INPUT_BITS:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_ggpo_max_input_bits);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_GGPO_PREDICTION_FRAMES:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_ggpo_prediction_frames);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_GGPO_NETWORK_DELAY:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_ggpo_network_delay);
+            break;
+         case MENU_ENUM_LABEL_NETPLAY_GGPO_OOP_PERCENT:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_netplay_ggpo_oop_percent);
             break;
          case MENU_ENUM_LABEL_CORE_LOCK:
             BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_core_lock);

@@ -3,15 +3,14 @@ import os
 import socket
 import time
 
-MAGIC = b"RARELAY1"
-MAGIC_PREFIX = MAGIC + b" "
+DEFAULT_MAGIC = "RARELAY1"
 
 DEFAULT_BIND = "0.0.0.0"
 DEFAULT_PORT = 7001
 DEFAULT_SESSION_TTL = 120.0
 DEFAULT_CLIENT_TTL = 30.0
 DEFAULT_MAX_SESSIONS = 512
-DEFAULT_MAX_PACKET = 2048
+DEFAULT_MAX_PACKET = 8192
 
 
 def _load_env_file():
@@ -41,6 +40,24 @@ _load_env_file()
 
 def _now():
     return time.monotonic()
+
+
+def _load_magic():
+    raw = os.getenv("RELAY_MAGIC")
+    if not raw:
+        return DEFAULT_MAGIC
+    if " " in raw:
+        return DEFAULT_MAGIC
+    try:
+        raw.encode("ascii")
+    except UnicodeEncodeError:
+        return DEFAULT_MAGIC
+    return raw
+
+
+MAGIC_TEXT = _load_magic()
+MAGIC = MAGIC_TEXT.encode("ascii")
+MAGIC_PREFIX = MAGIC + b" "
 
 
 def _get_env_float(name, default):
@@ -73,7 +90,7 @@ def _parse_cmd(data):
     parts = text.strip().split()
     if len(parts) < 3:
         return None
-    if parts[0] != MAGIC.decode("ascii"):
+    if parts[0] != MAGIC_TEXT:
         return None
     cmd = parts[1].upper()
     session = parts[2]
@@ -158,7 +175,8 @@ def main():
             if command == "HELLO":
                 if session is None:
                     if len(sessions) >= max_sessions:
-                        _send_response(sock, addr, "RARELAY1 FULL {}".format(session_id))
+                        _send_response(sock, addr, "{} FULL {}".format(
+                            MAGIC_TEXT, session_id))
                         continue
                     session = {
                         "clients": {1: None, 2: None},
@@ -168,7 +186,8 @@ def main():
 
                 if slot_token is not None:
                     if slot_token not in ("1", "2"):
-                        _send_response(sock, addr, "RARELAY1 ERR bad_slot")
+                        _send_response(sock, addr, "{} ERR {} bad_slot".format(
+                            MAGIC_TEXT, session_id))
                         continue
                     slot = int(slot_token)
                 else:
@@ -176,7 +195,8 @@ def main():
 
                 current = session["clients"].get(slot)
                 if current and current["addr"] != addr:
-                    _send_response(sock, addr, "RARELAY1 BUSY {}".format(session_id))
+                    _send_response(sock, addr, "{} BUSY {}".format(
+                        MAGIC_TEXT, session_id))
                     continue
 
                 _remove_client(address_map, sessions, addr)
@@ -186,14 +206,15 @@ def main():
 
                 ready = session["clients"][1] and session["clients"][2]
                 status = "READY" if ready else "WAIT"
-                _send_response(sock, addr, "RARELAY1 {} {} {}".format(
-                    status, session_id, slot
+                _send_response(sock, addr, "{} {} {} {}".format(
+                    MAGIC_TEXT, status, session_id, slot
                 ))
                 continue
 
             if command == "BYE":
                 _remove_client(address_map, sessions, addr)
-                _send_response(sock, addr, "RARELAY1 OK {}".format(session_id))
+                _send_response(sock, addr, "{} OK {}".format(
+                    MAGIC_TEXT, session_id))
                 continue
 
             if command == "PING":
@@ -204,10 +225,12 @@ def main():
                     if session and session["clients"].get(slot):
                         session["clients"][slot]["last_seen"] = now
                         session["updated"] = now
-                _send_response(sock, addr, "RARELAY1 PONG {}".format(session_id))
+                _send_response(sock, addr, "{} PONG {}".format(
+                    MAGIC_TEXT, session_id))
                 continue
 
-            _send_response(sock, addr, "RARELAY1 ERR unknown_command")
+            _send_response(sock, addr, "{} ERR {} unknown_command".format(
+                MAGIC_TEXT, session_id))
             continue
 
         entry = address_map.get(addr)

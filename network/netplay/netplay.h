@@ -173,6 +173,7 @@ typedef struct
    int ggpo_stats_ping;
    int ggpo_stats_send_queue_len;
    int ggpo_stats_recv_queue_len;
+   int ggpo_stats_kbps_sent;
    int ggpo_stats_local_frames_behind;
    int ggpo_stats_remote_frames_behind;
    uint32_t ggpo_stats_rollback_frames;
@@ -191,6 +192,12 @@ typedef struct
    uint32_t ggpo_delta_frames;
    uint32_t ggpo_delta_keyframes;
    bool ggpo_delta_stats_valid;
+   uint32_t ggpo_compress_job_queue_len;
+   uint32_t ggpo_compress_result_queue_len;
+   uint32_t ggpo_compress_pending_count;
+   uint32_t ggpo_compress_job_queue_max;
+   uint32_t ggpo_compress_result_queue_max;
+   bool ggpo_compress_stats_valid;
    unsigned server_port_deferred;
    uint8_t flags;
    char server_address_deferred[256];

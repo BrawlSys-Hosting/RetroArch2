@@ -8280,6 +8280,37 @@ static bool __cdecl netplay_ggpo_begin_game(const char *game)
    return true;
 }
 
+static void netplay_ggpo_set_env_int(const char *name, unsigned value)
+{
+   char value_buf[32];
+
+   snprintf(value_buf, sizeof(value_buf), "%u", value);
+#ifdef _WIN32
+   _putenv_s(name, value_buf);
+#else
+   setenv(name, value_buf, 1);
+#endif
+}
+
+static void netplay_ggpo_apply_env_settings(const settings_t *settings)
+{
+   if (!settings)
+      return;
+
+   netplay_ggpo_set_env_int("ggpo.sync.lz4_accel",
+         settings->uints.netplay_ggpo_lz4_accel);
+   netplay_ggpo_set_env_int("ggpo.network.delay",
+         settings->uints.netplay_ggpo_network_delay);
+   netplay_ggpo_set_env_int("ggpo.oop.percent",
+         settings->uints.netplay_ggpo_oop_percent);
+   netplay_ggpo_set_env_int("ggpo.network.send_interval",
+         settings->uints.netplay_ggpo_send_interval);
+   netplay_ggpo_set_env_int("ggpo.network.max_input_bits",
+         settings->uints.netplay_ggpo_max_input_bits);
+   netplay_ggpo_set_env_int("ggpo.sync.prediction_frames",
+         settings->uints.netplay_ggpo_prediction_frames);
+}
+
 static bool netplay_ggpo_update_delta_stats(netplay_t *netplay)
 {
    GGPOStateStats stats = {0};
@@ -8292,6 +8323,12 @@ static bool netplay_ggpo_update_delta_stats(netplay_t *netplay)
    netplay->ggpo_delta_ratio_max = 0;
    netplay->ggpo_delta_frames = 0;
    netplay->ggpo_delta_keyframes = 0;
+   netplay->ggpo_compress_job_queue_len = 0;
+   netplay->ggpo_compress_result_queue_len = 0;
+   netplay->ggpo_compress_pending_count = 0;
+   netplay->ggpo_compress_job_queue_max = 0;
+   netplay->ggpo_compress_result_queue_max = 0;
+   netplay->ggpo_compress_stats_valid = false;
    netplay->ggpo_delta_stats_valid = false;
 
    if (!GGPO_SUCCEEDED(ggpo_get_state_stats(netplay->ggpo, &stats)))
@@ -8303,6 +8340,17 @@ static bool netplay_ggpo_update_delta_stats(netplay_t *netplay)
    netplay->ggpo_delta_frames = (uint32_t)stats.delta_frames;
    netplay->ggpo_delta_keyframes = (uint32_t)stats.keyframes;
    netplay->ggpo_delta_stats_valid = stats.delta_frames > 0;
+   netplay->ggpo_compress_job_queue_len = (uint32_t)stats.compress_job_queue_len;
+   netplay->ggpo_compress_result_queue_len = (uint32_t)stats.compress_result_queue_len;
+   netplay->ggpo_compress_pending_count = (uint32_t)stats.compress_pending_count;
+   netplay->ggpo_compress_job_queue_max = (uint32_t)stats.compress_job_queue_max;
+   netplay->ggpo_compress_result_queue_max = (uint32_t)stats.compress_result_queue_max;
+   netplay->ggpo_compress_stats_valid =
+      stats.compress_job_queue_len > 0 ||
+      stats.compress_result_queue_len > 0 ||
+      stats.compress_pending_count > 0 ||
+      stats.compress_job_queue_max > 0 ||
+      stats.compress_result_queue_max > 0;
 
    return true;
 }
@@ -8643,6 +8691,12 @@ static bool netplay_ggpo_init_session(netplay_t *netplay,
    netplay->ggpo_delta_ratio_max = 0;
    netplay->ggpo_delta_frames = 0;
    netplay->ggpo_delta_keyframes = 0;
+   netplay->ggpo_compress_job_queue_len = 0;
+   netplay->ggpo_compress_result_queue_len = 0;
+   netplay->ggpo_compress_pending_count = 0;
+   netplay->ggpo_compress_job_queue_max = 0;
+   netplay->ggpo_compress_result_queue_max = 0;
+   netplay->ggpo_compress_stats_valid = false;
    netplay->ggpo_delta_stats_valid = false;
    netplay->ggpo_state_log_time = 0;
 
@@ -8658,14 +8712,18 @@ static bool netplay_ggpo_init_session(netplay_t *netplay,
    if (string_is_empty(game_name))
       game_name = "retroarch";
 
+   netplay_ggpo_apply_env_settings(settings);
+
    result = ggpo_start_session(&netplay->ggpo, &cb, game_name,
          (int)netplay->ggpo_player_count,
          (int)netplay->ggpo_input_size, local_port);
    if (!GGPO_SUCCEEDED(result))
       return false;
 
-   ggpo_set_disconnect_timeout(netplay->ggpo, 3000);
-   ggpo_set_disconnect_notify_start(netplay->ggpo, 1000);
+   ggpo_set_disconnect_timeout(netplay->ggpo,
+         (int)settings->uints.netplay_ggpo_disconnect_timeout);
+   ggpo_set_disconnect_notify_start(netplay->ggpo,
+         (int)settings->uints.netplay_ggpo_disconnect_notify_start);
 
    player.size = sizeof(player);
    player.type = GGPO_PLAYERTYPE_LOCAL;
@@ -11175,6 +11233,19 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
 
       if (netplay->is_server)
       {
+         if (mitm)
+         {
+            int  flen = 0;
+            char *buf = base64(netplay->mitm_session_id.unique,
+               sizeof(netplay->mitm_session_id.unique), &flen);
+
+            if (!buf)
+               goto failure;
+            strlcpy(host_room->mitm_session, buf,
+               sizeof(host_room->mitm_session));
+            free(buf);
+         }
+
          if (settings->bools.netplay_nat_traversal)
             netplay_init_nat_traversal(netplay);
          else
@@ -12246,11 +12317,18 @@ static void gfx_widget_netplay_ggpo_stats_iterate(void *user_data,
    net_st->ggpo_stats_valid = false;
    net_st->ggpo_state_stats_valid = false;
    net_st->ggpo_delta_stats_valid = false;
+   net_st->ggpo_compress_stats_valid = false;
    net_st->ggpo_delta_ratio_last = 0;
    net_st->ggpo_delta_ratio_avg = 0;
    net_st->ggpo_delta_ratio_max = 0;
    net_st->ggpo_delta_frames = 0;
    net_st->ggpo_delta_keyframes = 0;
+   net_st->ggpo_stats_kbps_sent = 0;
+   net_st->ggpo_compress_job_queue_len = 0;
+   net_st->ggpo_compress_result_queue_len = 0;
+   net_st->ggpo_compress_pending_count = 0;
+   net_st->ggpo_compress_job_queue_max = 0;
+   net_st->ggpo_compress_result_queue_max = 0;
 
    if (!netplay || !settings->bools.netplay_ggpo_stats_show)
       return;
@@ -12274,6 +12352,7 @@ static void gfx_widget_netplay_ggpo_stats_iterate(void *user_data,
    net_st->ggpo_stats_ping               = stats.network.ping;
    net_st->ggpo_stats_send_queue_len     = stats.network.send_queue_len;
    net_st->ggpo_stats_recv_queue_len     = stats.network.recv_queue_len;
+   net_st->ggpo_stats_kbps_sent          = stats.network.kbps_sent;
    net_st->ggpo_stats_local_frames_behind  = stats.timesync.local_frames_behind;
    net_st->ggpo_stats_remote_frames_behind = stats.timesync.remote_frames_behind;
    net_st->ggpo_stats_rollback_frames    = netplay->ggpo_rollback_frames;
@@ -12302,6 +12381,12 @@ static void gfx_widget_netplay_ggpo_stats_iterate(void *user_data,
       net_st->ggpo_delta_frames = netplay->ggpo_delta_frames;
       net_st->ggpo_delta_keyframes = netplay->ggpo_delta_keyframes;
       net_st->ggpo_delta_stats_valid = netplay->ggpo_delta_stats_valid;
+      net_st->ggpo_compress_job_queue_len = netplay->ggpo_compress_job_queue_len;
+      net_st->ggpo_compress_result_queue_len = netplay->ggpo_compress_result_queue_len;
+      net_st->ggpo_compress_pending_count = netplay->ggpo_compress_pending_count;
+      net_st->ggpo_compress_job_queue_max = netplay->ggpo_compress_job_queue_max;
+      net_st->ggpo_compress_result_queue_max = netplay->ggpo_compress_result_queue_max;
+      net_st->ggpo_compress_stats_valid = netplay->ggpo_compress_stats_valid;
    }
 }
 
@@ -12315,9 +12400,11 @@ static void gfx_widget_netplay_ggpo_stats_frame(void *data, void *userdata)
    gfx_widget_font_data_t *font = &p_dispwidget->gfx_widget_fonts.regular;
    bool show_state_stats = net_st->ggpo_state_stats_valid;
    bool show_delta_stats = show_state_stats && net_st->ggpo_delta_stats_valid;
+   bool show_compress_stats = show_state_stats && net_st->ggpo_compress_stats_valid;
    int ping = net_st->ggpo_stats_ping;
    int send_queue = net_st->ggpo_stats_send_queue_len;
    int recv_queue = net_st->ggpo_stats_recv_queue_len;
+   int kbps_sent = net_st->ggpo_stats_kbps_sent;
    int local_behind = net_st->ggpo_stats_local_frames_behind;
    int remote_behind = net_st->ggpo_stats_remote_frames_behind;
    uint32_t rollback_frames = net_st->ggpo_stats_rollback_frames;
@@ -12331,26 +12418,35 @@ static void gfx_widget_netplay_ggpo_stats_frame(void *data, void *userdata)
    uint32_t delta_ratio_max = net_st->ggpo_delta_ratio_max;
    uint32_t delta_frames = net_st->ggpo_delta_frames;
    uint32_t delta_keyframes = net_st->ggpo_delta_keyframes;
+   uint32_t compress_job_queue_len = net_st->ggpo_compress_job_queue_len;
+   uint32_t compress_result_queue_len = net_st->ggpo_compress_result_queue_len;
+   uint32_t compress_pending_count = net_st->ggpo_compress_pending_count;
+   uint32_t compress_job_queue_max = net_st->ggpo_compress_job_queue_max;
+   uint32_t compress_result_queue_max = net_st->ggpo_compress_result_queue_max;
    uint32_t delta_total = 0;
    char line1[64];
    char line2[64];
    char line3[96];
    char line4[96];
+   char line5[96];
    size_t line1_len;
    size_t line2_len;
    size_t line3_len = 0;
    size_t line4_len = 0;
+   size_t line5_len = 0;
    int line1_width;
    int line2_width;
    int line3_width = 0;
    int line4_width = 0;
+   int line5_width = 0;
    int total_width;
    unsigned line_height = p_dispwidget->simple_widget_height;
    unsigned total_lines = 2 + (show_state_stats ? 1 : 0) +
-      (show_delta_stats ? 1 : 0);
+      (show_delta_stats ? 1 : 0) + (show_compress_stats ? 1 : 0);
    unsigned total_height = line_height * total_lines;
    unsigned ping_offset = settings->bools.netplay_ping_show ? line_height : 0;
    int y;
+   unsigned line_index = 0;
 
    if (!net_st->ggpo_stats_valid)
       return;
@@ -12359,9 +12455,12 @@ static void gfx_widget_netplay_ggpo_stats_frame(void *data, void *userdata)
       ping = 999;
    if (ping < 0)
       ping = 0;
+   if (kbps_sent < 0)
+      kbps_sent = 0;
 
    line1_len = (size_t)snprintf(line1, sizeof(line1),
-         "GGPO PING: %dms  Q: %d/%d", ping, send_queue, recv_queue);
+         "GGPO PING: %dms  Q: %d/%d  TX: %dKB/s",
+         ping, send_queue, recv_queue, kbps_sent);
    line2_len = (size_t)snprintf(line2, sizeof(line2),
          "ROLLBACKS: %u  BEHIND: %d/%d",
          rollback_frames, local_behind, remote_behind);
@@ -12378,6 +12477,12 @@ static void gfx_widget_netplay_ggpo_stats_frame(void *data, void *userdata)
             delta_ratio_avg, delta_ratio_last, delta_ratio_max,
             delta_keyframes, delta_total);
    }
+   if (show_compress_stats)
+      line5_len = (size_t)snprintf(line5, sizeof(line5),
+            "COMP Q %u/%u P %u HW %u/%u",
+            compress_job_queue_len, compress_result_queue_len,
+            compress_pending_count, compress_job_queue_max,
+            compress_result_queue_max);
 
    line1_width = font_driver_get_message_width(
          font->font, line1, line1_len, 1.0f);
@@ -12397,6 +12502,13 @@ static void gfx_widget_netplay_ggpo_stats_frame(void *data, void *userdata)
             font->font, line4, line4_len, 1.0f);
       if (line4_width > total_width)
          total_width = line4_width;
+   }
+   if (show_compress_stats)
+   {
+      line5_width = font_driver_get_message_width(
+            font->font, line5, line5_len, 1.0f);
+      if (line5_width > total_width)
+         total_width = line5_width;
    }
    total_width += p_dispwidget->simple_widget_padding * 2;
 
@@ -12423,23 +12535,27 @@ static void gfx_widget_netplay_ggpo_stats_frame(void *data, void *userdata)
          font,
          line1,
          video_info->width - line1_width - p_dispwidget->simple_widget_padding,
-         (float)y + (line_height / 2.0f) + font->line_centre_offset,
+         (float)y + (line_height * line_index) + (line_height / 2.0f) +
+            font->line_centre_offset,
          video_info->width,
          video_info->height,
          0xFFFFFFFF,
          TEXT_ALIGN_LEFT,
          true);
+   line_index++;
 
    gfx_widgets_draw_text(
          font,
          line2,
          video_info->width - line2_width - p_dispwidget->simple_widget_padding,
-         (float)y + line_height + (line_height / 2.0f) + font->line_centre_offset,
+         (float)y + (line_height * line_index) + (line_height / 2.0f) +
+            font->line_centre_offset,
          video_info->width,
          video_info->height,
          0xFFFFFFFF,
          TEXT_ALIGN_LEFT,
          true);
+   line_index++;
 
    if (show_state_stats)
    {
@@ -12447,12 +12563,14 @@ static void gfx_widget_netplay_ggpo_stats_frame(void *data, void *userdata)
             font,
             line3,
             video_info->width - line3_width - p_dispwidget->simple_widget_padding,
-            (float)y + (line_height * 2) + (line_height / 2.0f) + font->line_centre_offset,
+            (float)y + (line_height * line_index) + (line_height / 2.0f) +
+               font->line_centre_offset,
             video_info->width,
             video_info->height,
             0xFFFFFFFF,
             TEXT_ALIGN_LEFT,
             true);
+      line_index++;
    }
 
    if (show_delta_stats)
@@ -12461,12 +12579,30 @@ static void gfx_widget_netplay_ggpo_stats_frame(void *data, void *userdata)
             font,
             line4,
             video_info->width - line4_width - p_dispwidget->simple_widget_padding,
-            (float)y + (line_height * 3) + (line_height / 2.0f) + font->line_centre_offset,
+            (float)y + (line_height * line_index) + (line_height / 2.0f) +
+               font->line_centre_offset,
             video_info->width,
             video_info->height,
             0xFFFFFFFF,
             TEXT_ALIGN_LEFT,
             true);
+      line_index++;
+   }
+
+   if (show_compress_stats)
+   {
+      gfx_widgets_draw_text(
+            font,
+            line5,
+            video_info->width - line5_width - p_dispwidget->simple_widget_padding,
+            (float)y + (line_height * line_index) + (line_height / 2.0f) +
+               font->line_centre_offset,
+            video_info->width,
+            video_info->height,
+            0xFFFFFFFF,
+            TEXT_ALIGN_LEFT,
+            true);
+      line_index++;
    }
 }
 #endif

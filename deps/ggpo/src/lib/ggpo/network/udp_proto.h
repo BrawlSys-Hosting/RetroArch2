@@ -133,7 +133,9 @@ protected:
    uint16         _remote_magic_number;
    bool           _connected;
    int            _send_latency;
+   int            _send_interval;
    int            _oop_percent;
+   int            _max_input_bits;
    struct {
       int         send_time;
       sockaddr_in dest_addr;

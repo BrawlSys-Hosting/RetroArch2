@@ -139,13 +139,20 @@ vw_load_game_state_callback(unsigned char *buffer, int len)
 bool __cdecl
 vw_save_game_state_callback(unsigned char **buffer, int *len, int *checksum, int)
 {
-   *len = sizeof(gs);
-   *buffer = (unsigned char *)malloc(*len);
-   if (!*buffer) {
+   int size = (int)sizeof(gs);
+   unsigned char *out = NULL;
+   if (buffer && *buffer && len && *len >= size) {
+      out = *buffer;
+   } else {
+      out = (unsigned char *)malloc(size);
+   }
+   if (!out) {
       return false;
    }
-   memcpy(*buffer, &gs, *len);
-   *checksum = fletcher32_checksum((short *)*buffer, *len / 2);
+   memcpy(out, &gs, size);
+   *buffer = out;
+   *len = size;
+   *checksum = fletcher32_checksum((short *)out, size / 2);
    return true;
 }
 

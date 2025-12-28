@@ -1711,6 +1711,38 @@ MSG_HASH(
    "netplay_ggpo_stats_show"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_NETPLAY_GGPO_DISCONNECT_TIMEOUT,
+   "netplay_ggpo_disconnect_timeout"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_NETPLAY_GGPO_DISCONNECT_NOTIFY_START,
+   "netplay_ggpo_disconnect_notify_start"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_NETPLAY_GGPO_LZ4_ACCEL,
+   "netplay_ggpo_lz4_accel"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_NETPLAY_GGPO_SEND_INTERVAL,
+   "netplay_ggpo_send_interval"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_NETPLAY_GGPO_MAX_INPUT_BITS,
+   "netplay_ggpo_max_input_bits"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_NETPLAY_GGPO_PREDICTION_FRAMES,
+   "netplay_ggpo_prediction_frames"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_NETPLAY_GGPO_NETWORK_DELAY,
+   "netplay_ggpo_network_delay"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_NETPLAY_GGPO_OOP_PERCENT,
+   "netplay_ggpo_oop_percent"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_FRAME_THROTTLE_ENABLE,
    "fastforward_ratio_throttle_enable"
    )

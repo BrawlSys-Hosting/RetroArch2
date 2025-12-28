@@ -7724,6 +7724,70 @@ MSG_HASH(
    "Session id used by the relay to pair two clients."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_DISCONNECT_TIMEOUT,
+   "GGPO Disconnect Timeout (ms)"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_GGPO_DISCONNECT_TIMEOUT,
+   "Disconnect if no packets are received within this window. Set 0 to disable."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_DISCONNECT_NOTIFY_START,
+   "GGPO Disconnect Notify Start (ms)"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_GGPO_DISCONNECT_NOTIFY_START,
+   "Send a network interrupted event after this much silence."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_LZ4_ACCEL,
+   "GGPO LZ4 Acceleration"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_GGPO_LZ4_ACCEL,
+   "Override ggpo.sync.lz4_accel (0 uses default). Higher is faster with worse compression."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_SEND_INTERVAL,
+   "GGPO Send Interval (ms)"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_GGPO_SEND_INTERVAL,
+   "Minimum ms between input packets (0 disables)."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_MAX_INPUT_BITS,
+   "GGPO Max Input Bits"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_GGPO_MAX_INPUT_BITS,
+   "Cap packed input bits per packet (0 uses default)."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_PREDICTION_FRAMES,
+   "GGPO Prediction Frames"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_GGPO_PREDICTION_FRAMES,
+   "Override prediction window (0 uses default)."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_NETWORK_DELAY,
+   "GGPO Network Delay (ms)"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_GGPO_NETWORK_DELAY,
+   "Artificial send delay for testing."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_NETPLAY_GGPO_OOP_PERCENT,
+   "GGPO Out-of-Order Percent"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_NETPLAY_GGPO_OOP_PERCENT,
+   "Chance to send out-of-order packets for testing."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_NETPLAY_MITM_SERVER_LOCATION_1,
    "North America (East Coast, USA)"
    )
