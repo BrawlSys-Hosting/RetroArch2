@@ -311,10 +311,23 @@ async def _handle_connection(state, max_sessions, reader, writer):
             return
 
         session = state.sessions.get(unique)
-        if not session:
+        if session:
+            await _handle_client(state, session, reader, writer)
+            return
+
+        if len(state.sessions) >= max_sessions:
             await _safe_close(writer)
             return
-        await _handle_client(state, session, reader, writer)
+        session_id = unique
+        session = Session(session_id, reader, writer)
+        state.sessions[session_id] = session
+        try:
+            await _send_id(writer, MAGIC_SESSION, session_id)
+        except (OSError, RuntimeError):
+            await _safe_close(writer)
+            state.sessions.pop(session_id, None)
+            return
+        await _handle_host_control(state, session)
         return
 
     if magic == MAGIC_LINK:

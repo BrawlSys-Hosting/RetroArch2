@@ -687,12 +687,15 @@ struct netplay
    /* Are we replaying old frames? */
    bool is_replay;
 
-   /* Opposite of stalling, should we be catching up? */
-   bool catch_up;
+  /* Opposite of stalling, should we be catching up? */
+  bool catch_up;
 
-   /* Force a rewind to other_frame_count/other_ptr.
-    * This is for synchronized events, such as restarting
-    * or savestate loading. */
+  /* Is TCP control channel enabled (for GGPO control/mitm connections). */
+  bool tcp_enabled;
+
+  /* Force a rewind to other_frame_count/other_ptr.
+   * This is for synchronized events, such as restarting
+   * or savestate loading. */
    bool force_rewind;
 
    /* Force a reset */

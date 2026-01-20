@@ -572,6 +572,7 @@ typedef struct settings
       char netplay_ggpo_relay_server[NAME_MAX_LENGTH];
       char netplay_ggpo_relay_session[NAME_MAX_LENGTH];
       char netplay_custom_mitm_server[NAME_MAX_LENGTH];
+      char netplay_mitm_session[NAME_MAX_LENGTH];
       char network_buildbot_url[NAME_MAX_LENGTH];
       char network_buildbot_assets_url[NAME_MAX_LENGTH];
       char menu_content_show_settings_password[NAME_MAX_LENGTH];
@@ -939,6 +940,7 @@ typedef struct settings
       bool crt_switch_hires_menu;
 
       /* Netplay */
+      bool netplay_client_swap_input;
       bool netplay_show_only_connectable;
       bool netplay_show_only_installed_cores;
       bool netplay_show_passworded;

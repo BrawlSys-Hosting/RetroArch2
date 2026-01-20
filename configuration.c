@@ -1710,6 +1710,7 @@ static struct config_path_setting *populate_settings_path(
    SETTING_PATH("netplay_ggpo_relay_server",     settings->paths.netplay_ggpo_relay_server, false, DEFAULT_NETPLAY_GGPO_RELAY_SERVER, true);
    SETTING_PATH("netplay_ggpo_relay_session",    settings->paths.netplay_ggpo_relay_session, false, DEFAULT_NETPLAY_GGPO_RELAY_SESSION, true);
    SETTING_PATH("netplay_custom_mitm_server",    settings->paths.netplay_custom_mitm_server, false, NULL, true);
+   SETTING_PATH("netplay_mitm_session",          settings->paths.netplay_mitm_session, false, DEFAULT_NETPLAY_MITM_SESSION, true);
    SETTING_PATH("netplay_nickname",              settings->paths.username, false, NULL, true);
    SETTING_PATH("netplay_password",              settings->paths.netplay_password, false, NULL, true);
    SETTING_PATH("netplay_spectate_password",     settings->paths.netplay_spectate_password, false, NULL, true);
@@ -2236,6 +2237,7 @@ static struct config_bool_setting *populate_settings_bool(
    SETTING_BOOL("netplay_use_rendezvous",        &settings->bools.netplay_use_rendezvous, true, DEFAULT_NETPLAY_USE_RENDEZVOUS, false);
    SETTING_BOOL("netplay_use_ggpo_relay",        &settings->bools.netplay_use_ggpo_relay, true, DEFAULT_NETPLAY_USE_GGPO_RELAY, false);
    SETTING_BOOL("netplay_use_ggpo",              &settings->bools.netplay_use_ggpo, true, DEFAULT_NETPLAY_USE_GGPO, false);
+   SETTING_BOOL("netplay_client_swap_input",     &settings->bools.netplay_client_swap_input, true, DEFAULT_NETPLAY_CLIENT_SWAP_INPUT, false);
    SETTING_BOOL("netplay_request_device_p1",     &settings->bools.netplay_request_devices[0], true, false, false);
    SETTING_BOOL("netplay_request_device_p2",     &settings->bools.netplay_request_devices[1], true, false, false);
    SETTING_BOOL("netplay_request_device_p3",     &settings->bools.netplay_request_devices[2], true, false, false);

@@ -9,7 +9,8 @@ Build
 - Linux/macOS: `cc -O2 -o rendezvous_server rendezvous_server.c`
 
 Run
-`rendezvous_server [port]`
+- C binary: `rendezvous_server [port]`
+- Python: `python rendezvous_server.py [port]`
 
 The default port is 7000. Each client sends `RNDV1 H <room>` (host) or
 `RNDV1 C <room>` (client). The server replies with:

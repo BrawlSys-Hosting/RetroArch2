@@ -30,6 +30,7 @@
 #define BUF_SIZE 256
 #define MAGIC "RNDV1"
 #define ROOM_TIMEOUT_SEC 30
+#define PEER_BURST_COUNT 3
 
 #ifdef _WIN32
 typedef SOCKET socket_t;
@@ -145,6 +146,15 @@ static void send_peer(socket_t sock, const struct sockaddr_in *to,
          (const struct sockaddr*)to, sizeof(*to));
 }
 
+static void send_peer_burst(socket_t sock, const struct sockaddr_in *to,
+      const struct sockaddr_in *peer)
+{
+   int i;
+
+   for (i = 0; i < PEER_BURST_COUNT; i++)
+      send_peer(sock, to, peer);
+}
+
 int main(int argc, char **argv)
 {
    socket_t sock = INVALID_SOCKET_FD;
@@ -172,6 +182,12 @@ int main(int argc, char **argv)
    {
       fprintf(stderr, "Failed to create UDP socket.\n");
       return 1;
+   }
+
+   {
+      int opt = 1;
+      setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
+            (const char*)&opt, (socklen_t)sizeof(opt));
    }
 
    memset(&addr, 0, sizeof(addr));
@@ -238,8 +254,8 @@ int main(int argc, char **argv)
 
       if (room->has_host && room->has_client)
       {
-         send_peer(sock, &room->host_addr, &room->client_addr);
-         send_peer(sock, &room->client_addr, &room->host_addr);
+         send_peer_burst(sock, &room->host_addr, &room->client_addr);
+         send_peer_burst(sock, &room->client_addr, &room->host_addr);
       }
       else
       {

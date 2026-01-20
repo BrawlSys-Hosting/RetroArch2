@@ -447,6 +447,9 @@ attempts to open the GGPO UDP port (host base, client base + 1) via UPnP, while
 hosts still open the TCP control port for lobby announcements. Chat relay and
 lobby announcements are supported via a parallel TCP control channel for direct
 sessions.
+Set netplay_client_swap_input to true to read client input from port 1 bindings
+while keeping GGPO player mapping unchanged (useful when clients only configure
+player 1 binds).
 Spectator mode and MITM/relay features are not available in GGPO mode.
 
 Rendezvous server support is available for GGPO. When enabled
@@ -469,3 +472,5 @@ channel. When enabled (netplay_use_mitm_server), RetroArch routes the TCP
 handshake/chat/lobby traffic through the relay server (netplay_mitm_server or
 netplay_custom_mitm_server). This does not relay UDP gameplay traffic; use
 the rendezvous or UDP relay settings for that.
+Set netplay_mitm_session to a base64 session id if you need a fixed tunnel
+session without relying on lobby announcements (host connects first).

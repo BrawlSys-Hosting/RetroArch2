@@ -164,6 +164,19 @@
 #define MITM_ADDR_MAGIC    0x52415441 /* RATA */
 #define MITM_PING_MAGIC    0x52415450 /* RATP */
 
+static bool netplay_mitm_session_requested(const mitm_id_t *id)
+{
+   const uint8_t zero[sizeof(id->unique)] = {0};
+
+   if (!id)
+      return false;
+
+   if (id->magic != htonl(MITM_SESSION_MAGIC))
+      return false;
+
+   return memcmp(id->unique, zero, sizeof(id->unique)) != 0;
+}
+
 #if 0
 /* Activate this to enable assertions on code sections
  * that should be exclusive to one modus */
@@ -1225,6 +1238,8 @@ static void netplay_handshake_ready(netplay_t *netplay,
    }
 
    RARCH_LOG("[Netplay] %s\n", msg);
+   if (netplay->tcp_enabled)
+      RARCH_LOG("[Netplay] TCP control channel established.\n");
    /* Useful notification to the client in figuring out
       if a connection was successfully made before an error,
       but not as useful to the server.
@@ -2440,6 +2455,9 @@ static void netplay_ggpo_collect_local_input(netplay_t *netplay, uint32_t *input
 {
    unsigned port;
    retro_input_state_t cb = netplay->cbs.state_cb;
+   settings_t *settings  = config_get_ptr();
+   bool swap_input       = !netplay->is_server
+      && settings->bools.netplay_client_swap_input;
 
    memset(input, 0, netplay->ggpo_input_size);
 
@@ -2448,12 +2466,16 @@ static void netplay_ggpo_collect_local_input(netplay_t *netplay, uint32_t *input
       unsigned dtype;
       uint32_t *state;
       unsigned i;
+      unsigned input_port = port;
 
       if (!(netplay->ggpo_local_devices & (1U << port)))
          continue;
 
       if (!netplay->ggpo_device_words[port])
          continue;
+
+      if (swap_input)
+         input_port = 0;
 
       dtype = netplay->config_devices[port] & RETRO_DEVICE_MASK;
       state = input + netplay->ggpo_device_offsets[port];
@@ -2463,15 +2485,15 @@ static void netplay_ggpo_collect_local_input(netplay_t *netplay, uint32_t *input
          case RETRO_DEVICE_ANALOG:
             for (i = 0; i < 2; i++)
             {
-               int16_t tmp_x = cb(port, RETRO_DEVICE_ANALOG, (unsigned)i, 0);
-               int16_t tmp_y = cb(port, RETRO_DEVICE_ANALOG, (unsigned)i, 1);
+               int16_t tmp_x = cb(input_port, RETRO_DEVICE_ANALOG, (unsigned)i, 0);
+               int16_t tmp_y = cb(input_port, RETRO_DEVICE_ANALOG, (unsigned)i, 1);
                state[1 + i] = (uint16_t)tmp_x | (((uint16_t)tmp_y) << 16);
             }
             /* fall through */
          case RETRO_DEVICE_JOYPAD:
             for (i = 0; i <= RETRO_DEVICE_ID_JOYPAD_R3; i++)
             {
-               int16_t tmp = cb(port, RETRO_DEVICE_JOYPAD, 0, (unsigned)i);
+               int16_t tmp = cb(input_port, RETRO_DEVICE_JOYPAD, 0, (unsigned)i);
                state[0] |= tmp ? (1U << i) : 0;
             }
             break;
@@ -2479,8 +2501,8 @@ static void netplay_ggpo_collect_local_input(netplay_t *netplay, uint32_t *input
          case RETRO_DEVICE_MOUSE:
          case RETRO_DEVICE_LIGHTGUN:
             {
-               int16_t tmp_x = cb(port, dtype, 0, 0);
-               int16_t tmp_y = cb(port, dtype, 0, 1);
+               int16_t tmp_x = cb(input_port, dtype, 0, 0);
+               int16_t tmp_y = cb(input_port, dtype, 0, 1);
                state[1]      = (uint16_t)tmp_x | (((uint16_t)tmp_y) << 16);
                for (i = 2;
                      i <= (unsigned)((dtype == RETRO_DEVICE_MOUSE) ?
@@ -2488,7 +2510,7 @@ static void netplay_ggpo_collect_local_input(netplay_t *netplay, uint32_t *input
                            RETRO_DEVICE_ID_LIGHTGUN_START);
                      i++)
                {
-                  int16_t tmp = cb(port, dtype, 0, (unsigned)i);
+                  int16_t tmp = cb(input_port, dtype, 0, (unsigned)i);
                   state[0] |= tmp ? (1U << i) : 0;
                }
             }
@@ -2502,7 +2524,7 @@ static void netplay_ggpo_collect_local_input(netplay_t *netplay, uint32_t *input
                for (key = 1; key < NETPLAY_KEY_LAST; key++)
                {
                   state[word] |=
-                     cb(port, RETRO_DEVICE_KEYBOARD, 0,
+                     cb(input_port, RETRO_DEVICE_KEYBOARD, 0,
                         netplay_key_ntoh(netplay, key)) ?
                            (UINT32_C(1) << bit) : 0;
                   bit++;
@@ -7757,6 +7779,24 @@ static int init_tcp_connection(netplay_t *netplay, const struct addrinfo *addr,
       {
          /* If we are connecting to a tunnel server,
             we must also send our session linking request. */
+         if (is_mitm)
+         {
+            if (netplay_mitm_session_requested(&netplay->mitm_session_id))
+            {
+               int flen = 0;
+               char *session = base64(netplay->mitm_session_id.unique,
+                     sizeof(netplay->mitm_session_id.unique), &flen);
+               if (session)
+               {
+                  RARCH_LOG("[Netplay] MITM link request: %s\n", session);
+                  free(session);
+               }
+               else
+                  RARCH_LOG("[Netplay] MITM link request: session id set.\n");
+            }
+            else
+               RARCH_LOG("[Netplay] MITM link request: no session id.\n");
+         }
          if (!netplay->mitm_session_id.magic ||
                socket_send_all_blocking_with_timeout(fd,
                   &netplay->mitm_session_id, sizeof(netplay->mitm_session_id),
@@ -7782,9 +7822,25 @@ static int init_tcp_connection(netplay_t *netplay, const struct addrinfo *addr,
       {
          mitm_id_t new_session = {0};
 
-         /* To request a new session,
-            we send the magic with the rest of the ID zeroed. */
          new_session.magic = htonl(MITM_SESSION_MAGIC);
+         if (netplay_mitm_session_requested(&netplay->mitm_session_id))
+            memcpy(new_session.unique, netplay->mitm_session_id.unique,
+               sizeof(new_session.unique));
+         if (netplay_mitm_session_requested(&netplay->mitm_session_id))
+         {
+            int flen = 0;
+            char *session = base64(netplay->mitm_session_id.unique,
+                  sizeof(netplay->mitm_session_id.unique), &flen);
+            if (session)
+            {
+               RARCH_LOG("[Netplay] MITM session request: %s\n", session);
+               free(session);
+            }
+            else
+               RARCH_LOG("[Netplay] MITM session request: using provided id.\n");
+         }
+         else
+            RARCH_LOG("[Netplay] MITM session request: generating new id.\n");
 
          /* Tunnel server should provide us with our session ID. */
          if (   socket_send_all_blocking_with_timeout(fd,
@@ -7794,19 +7850,23 @@ static int init_tcp_connection(netplay_t *netplay, const struct addrinfo *addr,
                   sizeof(netplay->mitm_session_id),
                   5000))
          {
-            if (ntohl(netplay->mitm_session_id.magic) == MITM_SESSION_MAGIC &&
-                  memcmp(netplay->mitm_session_id.unique, new_session.unique,
-                     sizeof(netplay->mitm_session_id.unique)))
+            if (ntohl(netplay->mitm_session_id.magic) == MITM_SESSION_MAGIC)
             {
                int flen = 0;
                char *session = base64(netplay->mitm_session_id.unique,
                      sizeof(netplay->mitm_session_id.unique), &flen);
                if (session)
                {
-                  RARCH_LOG("[Netplay] Tunnel session id: %s\n", session);
+                  RARCH_LOG("[Netplay] MITM session ready: %s\n", session);
                   free(session);
                }
-
+               else
+                  RARCH_LOG("[Netplay] MITM session ready.\n");
+            }
+            if (ntohl(netplay->mitm_session_id.magic) == MITM_SESSION_MAGIC &&
+                  memcmp(netplay->mitm_session_id.unique, new_session.unique,
+                     sizeof(netplay->mitm_session_id.unique)))
+            {
                /* Initialize data for handling tunneled client connections. */
                netplay->mitm_handler = (struct netplay_mitm_handler*)
                   calloc(1, sizeof(*netplay->mitm_handler));
@@ -7890,7 +7950,8 @@ static bool init_tcp_socket(netplay_t *netplay,
    const struct addrinfo *tmp_info;
    struct addrinfo *addr = NULL;
    struct addrinfo hints = {0};
-   bool is_mitm          = !server && mitm;
+   bool is_mitm          = mitm && *mitm;
+   const char *tcp_host  = is_mitm ? mitm : server;
    int fd                = -1;
 
    if (!network_init())
@@ -7908,16 +7969,22 @@ static bool init_tcp_socket(netplay_t *netplay,
          hints.ai_family = AF_INET;
 #endif
       }
-      else /* IPv4 only for relay servers. */
-         hints.ai_family = AF_INET;
    }
+   if (is_mitm) /* IPv4 only for relay servers. */
+      hints.ai_family = AF_INET;
    hints.ai_socktype = SOCK_STREAM;
 
    snprintf(port_buf, sizeof(port_buf), "%hu", (unsigned short)port);
    hints.ai_flags |= AI_NUMERICSERV;
 
-   if (getaddrinfo_retro(is_mitm ? mitm : server, port_buf,
-      &hints, &addr))
+   if (tcp_host)
+      RARCH_LOG("[Netplay] TCP control target: %s|%hu (%s).\n",
+         tcp_host, (unsigned short)port, is_mitm ? "relay" : "direct");
+   else
+      RARCH_LOG("[Netplay] TCP control listening on port %hu.\n",
+         (unsigned short)port);
+
+   if (getaddrinfo_retro(tcp_host, port_buf, &hints, &addr))
    {
       if (!server && !is_mitm)
       {
@@ -7925,7 +7992,7 @@ static bool init_tcp_socket(netplay_t *netplay,
 try_ipv4:
          /* Didn't work with IPv6, try IPv4 */
          hints.ai_family = AF_INET;
-         if (getaddrinfo_retro(server, port_buf, &hints, &addr))
+         if (getaddrinfo_retro(tcp_host, port_buf, &hints, &addr))
 #endif
          {
             RARCH_ERR("[Netplay] Failed to set a hosting address.\n");
@@ -7935,7 +8002,7 @@ try_ipv4:
       else
       {
          RARCH_ERR("[Netplay] Failed to resolve host: %s\n",
-            is_mitm ? mitm : server);
+            tcp_host ? tcp_host : "unknown");
          return false;
       }
    }
@@ -8849,7 +8916,9 @@ static void netplay_free(netplay_t *netplay)
  * netplay_new:
  * @server               : IP address of server.
  * @mitm                 : IP address of the MITM/tunnel server.
- * @port                 : Port of server.
+ * @port                 : GGPO/netplay base port (UDP).
+ * @tcp_port             : TCP control port (direct or MITM).
+ * @tcp_enabled          : If true, allow TCP control channel.
  * @mitm_session         : Session id for MITM/tunnel.
  * @check_frames         : Frequency with which to check CRCs.
  * @cb                   : Libretro callbacks.
@@ -8863,10 +8932,11 @@ static void netplay_free(netplay_t *netplay)
  * Returns: new netplay data.
  */
 static netplay_t *netplay_new(const char *server, const char *mitm,
-      uint16_t port, const char *mitm_session,
-      uint32_t check_frames, const struct retro_callbacks *cb,
-      bool nat_traversal, const char *nick, uint32_t quirks,
-      enum netplay_modus modus, uint16_t ggpo_peer_port)
+      uint16_t port, uint16_t tcp_port, bool tcp_enabled,
+      const char *mitm_session, uint32_t check_frames,
+      const struct retro_callbacks *cb, bool nat_traversal,
+      const char *nick, uint32_t quirks, enum netplay_modus modus,
+      uint16_t ggpo_peer_port)
 {
    netplay_t *netplay        = (netplay_t*)calloc(1, sizeof(*netplay));
 
@@ -8878,6 +8948,9 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
    netplay->cbs              = *cb;
    netplay->quirks           = quirks;
    netplay->modus            = modus;
+   netplay->tcp_enabled      = tcp_enabled;
+   netplay->tcp_port         = tcp_port;
+   netplay->ext_tcp_port     = tcp_port;
    netplay->crcs_valid       = true;
    netplay->listen_fd        = -1;
    netplay->next_announce    = -1;
@@ -8894,13 +8967,29 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
 
    netplay_key_init(netplay);
 
+   if (!string_is_empty(mitm_session))
+   {
+      int           flen = 0;
+      unsigned char *buf =
+         unbase64(mitm_session, (int)strlen(mitm_session), &flen);
+
+      if (!buf)
+         goto failure;
+      if (flen != sizeof(netplay->mitm_session_id.unique))
+      {
+         free(buf);
+         goto failure;
+      }
+
+      netplay->mitm_session_id.magic = htonl(MITM_SESSION_MAGIC);
+      memcpy(netplay->mitm_session_id.unique, buf, flen);
+      free(buf);
+   }
+
    if (netplay->is_server)
    {
       unsigned i;
       settings_t *settings = config_get_ptr();
-
-      netplay->tcp_port     = port;
-      netplay->ext_tcp_port = port;
 
       if (!mitm)
          netplay->nat_traversal = nat_traversal;
@@ -8949,25 +9038,6 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
 
       netplay->connections[0].fd = -1;
 
-      if (!string_is_empty(mitm_session))
-      {
-         int           flen = 0;
-         unsigned char *buf =
-            unbase64(mitm_session, (int)strlen(mitm_session), &flen);
-
-         if (!buf)
-            goto failure;
-         if (flen != sizeof(netplay->mitm_session_id.unique))
-         {
-            free(buf);
-            goto failure;
-         }
-
-         netplay->mitm_session_id.magic = htonl(MITM_SESSION_MAGIC);
-         memcpy(netplay->mitm_session_id.unique, buf, flen);
-         free(buf);
-      }
-
       netplay->allow_pausing = true;
 
       /* Clients get device info from the server. */
@@ -9001,27 +9071,16 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
 
    if (netplay->modus == NETPLAY_MODUS_GGPO)
    {
-      bool ggpo_require_tcp = true;
-
-      if (!netplay->is_server &&
-            (netplay_ggpo_rendezvous_enabled() || netplay_ggpo_relay_enabled()))
-         ggpo_require_tcp = false;
-
       netplay->ggpo_base_port = port;
       netplay->ggpo_peer_port = ggpo_peer_port;
 
-      if (ggpo_require_tcp)
+      if (netplay->tcp_enabled)
       {
-         if (!init_tcp_socket(netplay, server, mitm, port))
+         if (!netplay->tcp_port || !init_tcp_socket(netplay, server, mitm, netplay->tcp_port))
             goto failure;
       }
-      else
-      {
-         if (!init_tcp_socket(netplay, server, mitm, port))
-            RARCH_WARN("[Netplay] GGPO control channel unavailable; continuing without TCP.\n");
-      }
-      if (!netplay_init_buffers(netplay))
-         goto failure;
+     if (!netplay_init_buffers(netplay))
+        goto failure;
       if (netplay_ggpo_relay_enabled())
       {
          if (!netplay_ggpo_relay_start(netplay, port))
@@ -9035,7 +9094,7 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
       return netplay;
    }
 
-   if (     !init_tcp_socket(netplay, server, mitm, port)
+   if (     !init_tcp_socket(netplay, server, mitm, tcp_port)
          || !netplay_init_buffers(netplay))
       goto failure;
 
@@ -11072,12 +11131,22 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
    net_driver_state_t *net_st     = &networking_driver_st;
    struct netplay_room *host_room = &net_st->host_room;
    const char *mitm               = NULL;
+   uint16_t tcp_port              = 0;
+   uint16_t mitm_port             = 0;
+   bool is_client                 =
+      (net_st->flags & NET_DRIVER_ST_FLAG_NETPLAY_IS_CLIENT);
+   bool tcp_enabled               = true;
    enum netplay_modus modus       = NETPLAY_MODUS_INPUT_FRAME_SYNC;
 #ifdef HAVE_GGPO
    uint16_t ggpo_peer_port = 0;
    bool ggpo_use_rendezvous = false;
    bool ggpo_use_relay = false;
 #endif
+
+   if (string_is_empty(mitm_session) &&
+         settings->bools.netplay_use_mitm_server &&
+         !string_is_empty(settings->paths.netplay_mitm_session))
+      mitm_session = settings->paths.netplay_mitm_session;
 
    if (!(net_st->flags & NET_DRIVER_ST_FLAG_NETPLAY_ENABLED))
       return false;
@@ -11131,34 +11200,12 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
    if (serialization_quirks & RETRO_SERIALIZATION_QUIRK_PLATFORM_DEPENDENT)
       quirks |= NETPLAY_QUIRK_PLATFORM_DEPENDENT;
 
-   if (!(net_st->flags & NET_DRIVER_ST_FLAG_NETPLAY_IS_CLIENT))
+   if (!is_client)
    {
       memset(host_room, 0, sizeof(*host_room));
       host_room->connectable = true;
 
       server = NULL;
-
-      if (settings->bools.netplay_use_mitm_server)
-      {
-         const char *mitm_handle = settings->arrays.netplay_mitm_server;
-
-         if (netplay_mitm_query(mitm_handle))
-         {
-            /* We want to cache the MITM server handle in order to
-               prevent sending the wrong one to the lobby server if
-               we change its config mid-session. */
-            strlcpy(host_room->mitm_handle, mitm_handle,
-               sizeof(host_room->mitm_handle));
-
-            mitm = host_room->mitm_address;
-            port = host_room->mitm_port;
-         }
-         else
-            RARCH_WARN("[Netplay] Failed to get tunnel information. Switching to direct mode.\n");
-      }
-
-      if (!port)
-         port = RARCH_DEFAULT_PORT;
    }
    else
    {
@@ -11169,6 +11216,28 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
          mitm_session = net_st->server_session_deferred;
       }
    }
+
+   if (settings->bools.netplay_use_mitm_server)
+   {
+      const char *mitm_handle = settings->arrays.netplay_mitm_server;
+
+      if (netplay_mitm_query(mitm_handle))
+      {
+         /* Cache the MITM handle for lobby announcements (host only). */
+         if (!is_client)
+            strlcpy(host_room->mitm_handle, mitm_handle,
+               sizeof(host_room->mitm_handle));
+
+         mitm = host_room->mitm_address;
+         if (host_room->mitm_port > 0 && host_room->mitm_port <= UINT16_MAX)
+            mitm_port = (uint16_t)host_room->mitm_port;
+      }
+      else
+         RARCH_WARN("[Netplay] Failed to get tunnel information. Switching to direct mode.\n");
+   }
+
+   if (!port)
+      port = RARCH_DEFAULT_PORT;
 
 #ifdef HAVE_GGPO
    if (modus == NETPLAY_MODUS_GGPO &&
@@ -11189,6 +11258,14 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
 #endif
 
 #ifdef HAVE_GGPO
+   if (modus == NETPLAY_MODUS_GGPO &&
+         ggpo_use_rendezvous &&
+         !ggpo_use_relay &&
+         string_is_empty(mitm))
+      tcp_enabled = false;
+#endif
+
+#ifdef HAVE_GGPO
    if (modus == NETPLAY_MODUS_GGPO && ggpo_use_relay)
    {
       uint16_t relay_port = (uint16_t)settings->uints.netplay_ggpo_relay_port;
@@ -11200,9 +11277,11 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
    }
 #endif
 
+   tcp_port = tcp_enabled ? (mitm_port ? mitm_port : (uint16_t)port) : 0;
+
    net_st->flags &= ~NET_DRIVER_ST_FLAG_NETPLAY_CLIENT_DEFERRED;
    netplay        = netplay_new(
-      server, mitm, port, mitm_session,
+      server, mitm, port, tcp_port, tcp_enabled, mitm_session,
       settings->ints.netplay_check_frames,
       &cbs,
       settings->bools.netplay_nat_traversal,
@@ -11255,12 +11334,15 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
       }
 
       /* Start our control channel handshake */
-      if (!netplay_handshake_init_send(netplay, &netplay->connections[0],
-            LOW_NETPLAY_PROTOCOL_VERSION))
-         goto failure;
+      if (netplay->tcp_enabled)
+      {
+         if (!netplay_handshake_init_send(netplay, &netplay->connections[0],
+               LOW_NETPLAY_PROTOCOL_VERSION))
+            goto failure;
 
-      netplay->connections[0].mode = NETPLAY_CONNECTION_INIT;
-      netplay->self_mode           = NETPLAY_CONNECTION_INIT;
+         netplay->connections[0].mode = NETPLAY_CONNECTION_INIT;
+         netplay->self_mode           = NETPLAY_CONNECTION_INIT;
+      }
       return true;
    }
 
@@ -11296,17 +11378,20 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
       netplay->self_mode = NETPLAY_CONNECTION_SPECTATING;
       if (!settings->bools.netplay_start_as_spectator)
          netplay_toggle_play_spectate(netplay);
-   }
-   else
-   {
+      }
+      else
+      {
       /* Start our handshake */
-      if (!netplay_handshake_init_send(netplay, &netplay->connections[0],
-            LOW_NETPLAY_PROTOCOL_VERSION))
-         goto failure;
+      if (netplay->tcp_enabled)
+      {
+         if (!netplay_handshake_init_send(netplay, &netplay->connections[0],
+               LOW_NETPLAY_PROTOCOL_VERSION))
+            goto failure;
 
-      netplay->connections[0].mode = NETPLAY_CONNECTION_INIT;
-      netplay->self_mode           = NETPLAY_CONNECTION_INIT;
-   }
+         netplay->connections[0].mode = NETPLAY_CONNECTION_INIT;
+         netplay->self_mode           = NETPLAY_CONNECTION_INIT;
+      }
+      }
 
    /* Tell a core that uses the netpacket interface that the host is ready */
    if (netplay->is_server && net_st->core_netpacket_interface &&

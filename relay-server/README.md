@@ -93,6 +93,9 @@ RetroArch integration:
 - Enable `netplay_use_mitm_server`.
 - Set `netplay_mitm_server` to `custom`.
 - Set `netplay_custom_mitm_server` to `<host>|<port>` (example: `relay.example.com|7002`).
+- Optional: set `netplay_mitm_session` to a base64 session id to request a fixed
+  tunnel session; clients can pass the same session id via `--connect` or lobby
+  invites. The host should connect first.
 
 This only relays TCP control traffic. Use rendezvous or the UDP relay to handle
 GGPO gameplay traffic if direct UDP is not possible.
